@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""
-dualmonitor.py — single-plot cluster dashboard
-──────────────────────────────────────────────
-GUI ▸ last 2 h (auto-scaled Y, ±Zoom)
-RAW ▸ keeps every sample (pruned in Excel by 100-row mean)
-Excel ▸ absolute Time + rel_min axis (wait negative, stress 0)
-Buttons ▸ log / stress flow / skip cooling / reboot nodes …
+"""Cluster monitoring dashboard.
+
+This script collects SoC and fluid temperatures from a cluster of
+Raspberry Pis using SSH and an optional MCC-134 board. It can display a
+Tkinter GUI or run headless and periodically save data to CSV files and
+Excel workbooks.
 """
 
-# ───────── USER SETTINGS ─────────
-NODES_FILE   = "/home/motul/nodes_ips"          # ip [slots=N]
-CSV_DIR      = "/home/motul/temperatures"
+# ───────── DEFAULT SETTINGS ─────────
+DEFAULT_NODES_FILE = "/home/motul/nodes_ips"  # ip [slots=N]
+DEFAULT_CSV_DIR    = "/home/motul/temperatures"
 FIGSIZE      = (15, 10)
 RIGHT_MARGIN = 0.75                             # legend area
 LEGEND_ANCHOR= (0.99, 1.05)
@@ -23,11 +22,21 @@ BIG_FONT     = ("Helvetica", 14)                # global UI font
 AVG_BUCKET   = 100                              # rows averaged → Excel
 # ─────────────────────────────────
 
-import os, sys, time, socket, contextlib, subprocess, shutil, math
+import os
+import sys
+import time
+import socket
+import contextlib
+import subprocess
+import shutil
+import math
 from datetime import datetime, timedelta
 from threading  import Thread, Lock, Event
 from pathlib    import Path
 from collections import deque
+from dataclasses import dataclass
+import argparse
+import logging
 import pandas as pd
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -41,20 +50,78 @@ plt.rcParams.update({"font.size": 12})
 
 from daqhats import mcc134, HatIDs, hat_list, TcTypes
 
-RAW_SOC   = Path(CSV_DIR)/"raw_soc.csv"
-RAW_FLUID = Path(CSV_DIR)/"raw_fluid.csv"
-os.makedirs(CSV_DIR, exist_ok=True)
+# These paths are initialised in ``main`` after command-line arguments are
+# parsed.
+CSV_DIR: Path
+RAW_SOC: Path
+RAW_FLUID: Path
+
+
+class DataWriter:
+    """Accumulate rows and write them to CSV periodically."""
+
+    def __init__(self, path: Path, flush_every: int = 50) -> None:
+        self.path = path
+        self.flush_every = flush_every
+        self.buffer: list[dict] = []
+        self.lock = Lock()
+
+    def write_row(self, row: pd.Series) -> None:
+        """Add a single row to the buffer and flush if needed."""
+        with self.lock:
+            self.buffer.append(row.to_dict())
+            if len(self.buffer) >= self.flush_every:
+                self.flush()
+
+    def write_df(self, df: pd.DataFrame) -> None:
+        """Add multiple rows to the buffer from a DataFrame."""
+        with self.lock:
+            self.buffer.extend(df.to_dict(orient="records"))
+            if len(self.buffer) >= self.flush_every:
+                self.flush()
+
+    def flush(self) -> None:
+        """Write buffered rows to disk."""
+        if not self.buffer:
+            return
+        header = not self.path.exists()
+        pd.DataFrame(self.buffer).to_csv(
+            self.path, mode="a", header=header, index=False
+        )
+        self.buffer.clear()
+
+    def close(self) -> None:
+        """Flush remaining rows."""
+        with self.lock:
+            self.flush()
 
 # ───────────────────────────────────────────────────────────────
 class UnifiedMonitor(ttk.Frame):
-    COLORS=["blue","green","pink","purple","red","orange","navy","cyan",
-            "brown","gray","olive","lime","teal","maroon"]
-    NAMES ={0:"cold fluid",1:"hot air",2:"cold air",3:"hot fluid"}
-    FLUID_ORDER=[3,0,1,2]
+    COLORS = [
+        "blue",
+        "green",
+        "pink",
+        "purple",
+        "red",
+        "orange",
+        "navy",
+        "cyan",
+        "brown",
+        "gray",
+        "olive",
+        "lime",
+        "teal",
+        "maroon",
+    ]
+    NAMES = {0: "cold fluid", 1: "hot air", 2: "cold air", 3: "hot fluid"}
+    FLUID_ORDER = [3, 0, 1, 2]
 
-    def __init__(self, master):
-        super().__init__(master); self.pack(fill=tk.BOTH, expand=True)
-        ttk.Style(master).configure(".", font=BIG_FONT, padding=6)
+    def __init__(self, master: tk.Tk, headless: bool = False) -> None:
+        super().__init__(master)
+        self.headless = headless
+        if not self.headless:
+            self.pack(fill=tk.BOTH, expand=True)
+            ttk.Style(master).configure(".", font=BIG_FONT, padding=6)
 
         # live data
         self.cl_lock=Lock(); self.tc_lock=Lock()
@@ -71,18 +138,26 @@ class UnifiedMonitor(ttk.Frame):
         self.manual_ylim=False; self.temp_ylim=[20,90]
 
         # event log (last 2 lines)
-        self.log=deque(maxlen=2)
+        self.log = deque(maxlen=2)
+        self.log_labels: list[tk.Label] = []
 
-        self._build_ui()
+        if not self.headless:
+            self._build_ui()
         self.local_ip=socket.gethostbyname(socket.gethostname())
         self.node_ips=self._load_nodes(); self._show_connection_status()
 
         # workers
-        for ip in self.node_ips: Thread(target=self._poll_node,args=(ip,),daemon=True).start()
-        self.hat=self._init_hat();       Thread(target=self._tc_worker,daemon=True).start()
+        for ip in self.node_ips:
+            Thread(target=self._poll_node, args=(ip,), daemon=True).start()
+        self.hat = self._init_hat()
+        Thread(target=self._tc_worker, daemon=True).start()
 
-        self.plot_id=self.after(1000,self._refresh_plot)
-        self.tick_id=self.after(1000,self._tick)
+        self.soc_writer = DataWriter(RAW_SOC)
+        self.fluid_writer = DataWriter(RAW_FLUID)
+
+        if not self.headless:
+            self.plot_id = self.after(1000, self._refresh_plot)
+            self.tick_id = self.after(1000, self._tick)
 
     # ───── UI ─────
     def _build_ui(self):
@@ -143,10 +218,12 @@ class UnifiedMonitor(ttk.Frame):
         ttk.Button(frame,text="-5",width=3,command=lambda v=var:v.set(max(0,v.get()-5))).pack(side=tk.LEFT)
 
     # ───── event log helper ─────
-    def log_msg(self,msg):
+    def log_msg(self, msg: str) -> None:
+        """Add a message to the GUI log and the logger."""
+        logging.info(msg)
         self.log.appendleft(f"{datetime.now():%H:%M:%S}  {msg}")
-        for i,lb in enumerate(self.log_labels):
-            lb.config(text=self.log[i] if i<len(self.log) else "")
+        for i, lb in enumerate(self.log_labels):
+            lb.config(text=self.log[i] if i < len(self.log) else "")
 
     # ───── banner helpers ─────
     def _show_connection_status(self):
@@ -314,14 +391,13 @@ class UnifiedMonitor(ttk.Frame):
                 slots=int(parts[1].split("=")[1]) if len(parts)>1 and "=" in parts[1] else 1
                 ips.extend([ip]*slots)
         return ips
-    def _save_raw_soc(self,row):
-        RAW_SOC.with_suffix('').parent.mkdir(exist_ok=True)
-        header=not RAW_SOC.exists()
-        row.to_frame().T.to_csv(RAW_SOC,mode="a",header=header,index=False)
-    def _save_raw_fluid(self,rows_df):
-        RAW_FLUID.parent.mkdir(exist_ok=True)
-        header=not RAW_FLUID.exists()
-        rows_df.to_csv(RAW_FLUID,mode="a",header=header,index=False)
+    def _save_raw_soc(self, row: pd.Series) -> None:
+        """Queue a SoC temperature row for disk writing."""
+        self.soc_writer.write_row(row)
+
+    def _save_raw_fluid(self, rows_df: pd.DataFrame) -> None:
+        """Queue fluid temperature rows for disk writing."""
+        self.fluid_writer.write_df(rows_df)
 
     def _poll_node(self,ip):
         while not self.stop.is_set():
@@ -333,18 +409,36 @@ class UnifiedMonitor(ttk.Frame):
                 self.cl_df=pd.concat([self.cl_df,row.to_frame().T],ignore_index=True)
                 self._trim(self.cl_df)
             time.sleep(1)
-    def _read_stats(self,ip):
+    def _read_stats(self, ip: str) -> tuple[float, int]:
+        """Read temperature and clock from a node via SSH."""
         try:
-            if ip==self.local_ip:
-                t=float(open("/sys/class/thermal/thermal_zone0/temp").read())/1000
-                c=int(open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq").read())/1000
-                return t,c
-            t=float(subprocess.check_output(
-                f"ssh {SSH_OPTS} pi@{ip} cat /sys/class/thermal/thermal_zone0/temp",shell=True).strip())/1000
-            c=int(subprocess.check_output(
-                f"ssh {SSH_OPTS} pi@{ip} cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq",shell=True).strip())/1000
-            return t,c
-        except: return 0,0
+            if ip == self.local_ip:
+                t = float(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
+                c = int(
+                    open(
+                        "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
+                    ).read()
+                ) / 1000
+                return t, c
+            t = float(
+                subprocess.check_output(
+                    f"ssh {SSH_OPTS} pi@{ip} cat /sys/class/thermal/thermal_zone0/temp",
+                    shell=True,
+                ).strip()
+            ) / 1000
+            c = int(
+                subprocess.check_output(
+                    f"ssh {SSH_OPTS} pi@{ip} cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq",
+                    shell=True,
+                ).strip()
+            ) / 1000
+            return t, c
+        except subprocess.SubprocessError as exc:
+            logging.warning("SSH read failed for %s: %s", ip, exc)
+            return 0, 0
+        except Exception as exc:  # noqa: broad-except
+            logging.exception("Error reading stats from %s", ip)
+            return 0, 0
     @staticmethod
     def _trim(df):
         cutoff=datetime.now()-timedelta(hours=DISPLAY_H)
@@ -492,23 +586,76 @@ class UnifiedMonitor(ttk.Frame):
         with self.tc_lock: self.tc_df=self.tc_df.iloc[0:0]
         self.log_msg("Data cleared")
 
+    # ───── shutdown ─────
+    def close(self) -> None:
+        """Stop workers and flush files."""
+        if not self.alive:
+            return
+        self.alive = False
+        self.stop.set()
+        self._kill_stress()
+        if hasattr(self, "plot_id"):
+            try:
+                self.after_cancel(self.plot_id)
+            except tk.TclError:
+                pass
+        if hasattr(self, "tick_id"):
+            try:
+                self.after_cancel(self.tick_id)
+            except tk.TclError:
+                pass
+        self.soc_writer.close()
+        self.fluid_writer.close()
+        if self.logging:
+            tag = "stress" if self.log_stress else "manual"
+            self._write_excel(tag)
+
 # ───────── ENTRY ─────────
 def main():
-    root=tk.Tk(); root.title("Cluster Dashboard"); root.geometry("1100x760")
-    ui=UnifiedMonitor(root)
-    def _close():
-        if ui.alive:
-            ui.alive=False; ui.stop.set(); ui._kill_stress()
-            for job in (getattr(ui,"plot_id",None), getattr(ui,"tick_id",None)):
-                if job:
-                    try: root.after_cancel(job)
-                    except tk.TclError: pass
-            if ui.logging:
-                tag="stress" if ui.log_stress else "manual"
-                ui._write_excel(tag)
+    parser = argparse.ArgumentParser(description="Cluster dashboard")
+    parser.add_argument(
+        "--nodes-file", default=DEFAULT_NODES_FILE, help="File with node IPs"
+    )
+    parser.add_argument(
+        "--csv-dir", default=DEFAULT_CSV_DIR, help="Directory for CSV output"
+    )
+    parser.add_argument(
+        "--headless", action="store_true", help="Run without showing the GUI"
+    )
+    args = parser.parse_args()
+
+    global NODES_FILE, CSV_DIR, RAW_SOC, RAW_FLUID
+    NODES_FILE = args.nodes_file
+    CSV_DIR = Path(args.csv_dir)
+    CSV_DIR.mkdir(parents=True, exist_ok=True)
+    RAW_SOC = CSV_DIR / "raw_soc.csv"
+    RAW_FLUID = CSV_DIR / "raw_fluid.csv"
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s: %(message)s",
+        handlers=[
+            logging.FileHandler(CSV_DIR / "monitor.log"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+
+    root = tk.Tk()
+    root.title("Cluster Dashboard")
+    root.geometry("1100x760")
+    if args.headless:
+        root.withdraw()
+    ui = UnifiedMonitor(root, headless=args.headless)
+
+    def _close() -> None:
+        ui.close()
         root.destroy()
-    root.protocol("WM_DELETE_WINDOW",_close)
-    root.mainloop()
+
+    root.protocol("WM_DELETE_WINDOW", _close)
+    try:
+        root.mainloop()
+    finally:
+        ui.close()
 
 if __name__=="__main__":
     main()
