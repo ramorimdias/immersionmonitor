@@ -581,7 +581,10 @@ class UnifiedMonitor(ttk.Frame):
             agg["Time"] = "first"
 
         out = g.agg(agg).reset_index()
-        out.pop("_bucket", None)
+        
+        out = out.drop(columns="_bucket", errors="ignore")
+
+ 
         return out
     def _write_excel(self, tag):
         if not self.logging: return
@@ -671,8 +674,9 @@ class UnifiedMonitor(ttk.Frame):
                 # the time points are not equally spaced.
                 ch = wb.add_chart({
                     "type": "scatter",
-                    "subtype": "straight_with_markers",
+                    "subtype": "straight",  # lines only, no markers
                 })
+                ch.show_blanks_as("span")  # connect across blank cells
                 for col in range(1, len(df.columns)):
                     ch.add_series(
                         {
