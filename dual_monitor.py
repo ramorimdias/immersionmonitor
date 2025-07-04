@@ -591,6 +591,8 @@ class UnifiedMonitor(ttk.Frame):
             with self.tc_lock: fl=self.tc_df.copy().reset_index(drop=True)
 
         # relative-minute column
+        cl["Time"] = pd.to_datetime(cl["Time"], errors="coerce")
+        fl["Time"] = pd.to_datetime(fl["Time"], errors="coerce")
         ref=self.stress_start if self.stress_start else cl["Time"].iloc[0]
         cl["rel_min"]=cl["Time"].sub(ref).dt.total_seconds().div(60)
         fl["rel_min"]=fl["Time"].sub(ref).dt.total_seconds().div(60)
