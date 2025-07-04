@@ -231,30 +231,38 @@ class UnifiedMonitor(ttk.Frame):
     # ───── UI ─────
     def _build_ui(self):
         # ---------- top bar ----------
-        top=ttk.Frame(self); top.pack(fill=tk.X)
-        self.start_log_btn = ttk.Button(top, text=self.tr("Start Log"), command=self._start_log)
+        top = ttk.Frame(self)
+        top.pack(fill=tk.X)
+
+        left = ttk.Frame(top)
+        left.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        right = ttk.Frame(top)
+        right.pack(side=tk.RIGHT)
+
+        self.start_log_btn = ttk.Button(left, text=self.tr("Start Log"), command=self._start_log)
         self.start_log_btn.pack(side=tk.LEFT,padx=4)
-        self.stop_log_btn = ttk.Button(top, text=self.tr("Stop Log"), command=self._stop_log)
+        self.stop_log_btn = ttk.Button(left, text=self.tr("Stop Log"), command=self._stop_log)
         self.stop_log_btn.pack(side=tk.LEFT,padx=4)
         self.skip_btn = ttk.Button(
-            top,
+            left,
             text=self.tr("Skip Cooling"),
             state=tk.DISABLED,
             command=self._ask_skip_cooling,
         )
         self.skip_btn.pack(side=tk.LEFT,padx=4)
-        self.save_btn = ttk.Button(top, text=self.tr("Save XLSX"), command=self._ask_write_excel)
+        self.save_btn = ttk.Button(left, text=self.tr("Save XLSX"), command=self._ask_write_excel)
         self.save_btn.pack(side=tk.LEFT,padx=4)
-        self.clear_btn = ttk.Button(top, text=self.tr("Clear ALL"), command=self._clear_all)
+        self.clear_btn = ttk.Button(left, text=self.tr("Clear ALL"), command=self._clear_all)
         self.clear_btn.pack(side=tk.LEFT,padx=4)
-        self.reboot_btn=ttk.Button(top,text=self.tr("Reboot Nodes"),command=self._ask_reboot_nodes)
+        self.reboot_btn = ttk.Button(left, text=self.tr("Reboot Nodes"), command=self._ask_reboot_nodes)
         self.reboot_btn.pack(side=tk.LEFT,padx=6)
-        self.status_lbl=ttk.Label(top,text=self.tr("Idle"),width=20,anchor="center",background="white")
-        self.status_lbl.pack(side=tk.LEFT,padx=12)
-        self.full_btn=ttk.Button(top,text=self.tr("Full Screen"),command=self._toggle_full)
-        self.full_btn.pack(side=tk.RIGHT,padx=4)
-        self.lang_btn=ttk.Button(top,text="FR",command=self._toggle_lang,width=4)
-        self.lang_btn.pack(side=tk.RIGHT,padx=4)
+        self.status_lbl = ttk.Label(left, text=self.tr("Idle"), width=20, anchor="center", background="white")
+        self.status_lbl.pack(side=tk.LEFT, padx=12)
+
+        self.full_btn = ttk.Button(right, text=self.tr("Full Screen"), command=self._toggle_full)
+        self.full_btn.pack(side=tk.RIGHT, padx=4)
+        self.lang_btn = ttk.Button(right, text="FR", command=self._toggle_lang, width=6)
+        self.lang_btn.pack(side=tk.RIGHT, padx=4)
 
         # ---------- spinners ----------
         st=ttk.Frame(self); st.pack(fill=tk.X)
