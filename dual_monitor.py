@@ -656,7 +656,13 @@ class UnifiedMonitor(ttk.Frame):
                 if df.empty or len(df.columns) <= 1:
                     return
                 rows = len(df)
-                ch = wb.add_chart({"type": "line"})
+                # Use an XY scatter chart so the X axis is treated as numeric
+                # rather than categorical. This ensures correct plotting when
+                # the time points are not equally spaced.
+                ch = wb.add_chart({
+                    "type": "scatter",
+                    "subtype": "straight_with_markers",
+                })
                 for col in range(1, len(df.columns)):
                     ch.add_series(
                         {
