@@ -29,12 +29,10 @@ import socket
 import contextlib
 import subprocess
 import shutil
-import math
 from datetime import datetime, timedelta
 from threading  import Thread, Lock, Event
 from pathlib    import Path
 from collections import deque
-from dataclasses import dataclass
 import argparse
 import logging
 import pandas as pd
@@ -436,7 +434,7 @@ class UnifiedMonitor(ttk.Frame):
         except subprocess.SubprocessError as exc:
             logging.warning("SSH read failed for %s: %s", ip, exc)
             return 0, 0
-        except Exception as exc:  # noqa: broad-except
+        except Exception:  # noqa: broad-except
             logging.exception("Error reading stats from %s", ip)
             return 0, 0
     @staticmethod
@@ -527,8 +525,12 @@ class UnifiedMonitor(ttk.Frame):
                 .mean().reset_index(drop=True).join(df.loc[df.index[::k],["Time"]].reset_index(drop=True)))
     def _write_excel(self, tag):
         if not self.logging: return
-        try: import xlsxwriter
-        except ImportError: self.log_msg("XlsxWriter missing"); return
+        try:
+            import importlib
+            importlib.import_module("xlsxwriter")
+        except ImportError:
+            self.log_msg("XlsxWriter missing")
+            return
 
         ts=datetime.now().strftime("%Y-%m-%d_%H%M")
         path=Path(CSV_DIR)/f"monitor_{ts}_{tag}.xlsx"
@@ -640,7 +642,13 @@ def main():
         ],
     )
 
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        if args.headless:
+            logging.error("Tk unavailable in headless mode: %s", exc)
+            return
+        raise
     root.title("Cluster Dashboard")
     root.geometry("1100x760")
     if args.headless:
@@ -651,7 +659,10 @@ def main():
         ui.close()
         root.destroy()
 
-    root.protocol("WM_DELETE_WINDOW", _close)
+    try:
+        root.protocol("WM_DELETE_WINDOW", _close)
+    except tk.TclError:
+        pass
     try:
         root.mainloop()
     finally:
