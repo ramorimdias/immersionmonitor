@@ -165,7 +165,12 @@ class UnifiedMonitor(ttk.Frame):
         top=ttk.Frame(self); top.pack(fill=tk.X)
         ttk.Button(top,text="Start Log",command=self._start_log).pack(side=tk.LEFT,padx=4)
         ttk.Button(top,text="Stop Log", command=self._stop_log).pack(side=tk.LEFT,padx=4)
-        self.skip_btn=ttk.Button(top,text="Skip Cooling",state=tk.DISABLED,command=self._skip_cooling)
+        self.skip_btn = ttk.Button(
+            top,
+            text="Skip Cooling",
+            state=tk.DISABLED,
+            command=self._ask_skip_cooling,
+        )
         self.skip_btn.pack(side=tk.LEFT,padx=4)
         ttk.Button(top,text="Save XLSX",command=self._ask_write_excel).pack(side=tk.LEFT,padx=4)
         ttk.Button(top,text="Clear ALL",command=self._clear_all).pack(side=tk.LEFT,padx=4)
@@ -261,10 +266,19 @@ class UnifiedMonitor(ttk.Frame):
     def _stop_log(self):
         if self.logging:
             self._write_excel('manual'); self.logging=False; self.log_msg("Log stopped")
-    def _skip_cooling(self):
-        if self.logging and messagebox.askyesno("Skip cooling", "Skip cooling and finalize log?"):
-            self._write_excel('stress'); self.logging=False; self.log_stress=False
-            self.skip_btn.config(state=tk.DISABLED); self.log_msg("Cooling skipped")
+    def _skip_cooling(self) -> None:
+        """Finalize the log immediately."""
+        self._write_excel("stress")
+        self.logging = False
+        self.log_stress = False
+        self.skip_btn.config(state=tk.DISABLED)
+        self.log_msg("Cooling skipped")
+
+    def _ask_skip_cooling(self) -> None:
+        if self.logging and messagebox.askyesno(
+            "Skip cooling", "Skip cooling and finalize log?"
+        ):
+            self._skip_cooling()
 
     def _ask_write_excel(self) -> None:
         if messagebox.askyesno("Save XLSX", "Save data to an Excel file?"):
