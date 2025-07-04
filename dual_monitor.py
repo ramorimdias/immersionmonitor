@@ -564,19 +564,25 @@ class UnifiedMonitor(ttk.Frame):
             return df
         if keep is None:
             keep = []
+
         if "rel_min" in df.columns:
             bucket = 1 / max(POINTS_PER_MIN, 1)
-            g = df.groupby((df["rel_min"] // bucket).astype(int))
+            df = df.assign(_bucket=(df["rel_min"] // bucket).astype(int))
         else:
             n = len(df)
             k = max(1, n // AVG_BUCKET)
-            g = df.groupby(df.index // k)
-        avg = g[cols].mean().reset_index(drop=True)
-        keep_cols = [c for c in keep + ["Time"] if c in df.columns]
-        if keep_cols:
-            keep_df = g[keep_cols].first().reset_index(drop=True)
-            avg = avg.join(keep_df)
-        return avg
+            df = df.assign(_bucket=(df.index // k))
+
+        g_cols = ["_bucket"] + [c for c in keep if c in df.columns]
+        g = df.groupby(g_cols)
+
+        agg = {c: "mean" for c in cols if c in df.columns}
+        if "Time" in df.columns:
+            agg["Time"] = "first"
+
+        out = g.agg(agg).reset_index()
+        out = out.drop(columns="_bucket", errors="ignore")
+        return out
     def _write_excel(self, tag):
         if not self.logging: return
         try: import xlsxwriter
@@ -665,8 +671,9 @@ class UnifiedMonitor(ttk.Frame):
                 # the time points are not equally spaced.
                 ch = wb.add_chart({
                     "type": "scatter",
-                    "subtype": "straight_with_markers",
+                    "subtype": "straight",  # lines only, no markers
                 })
+                ch.show_blanks_as("span")  # connect across blank cells
                 for col in range(1, len(df.columns)):
                     ch.add_series(
                         {
