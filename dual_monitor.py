@@ -472,15 +472,24 @@ class UnifiedMonitor(ttk.Frame):
 
     # ───── MCC-134 ─────
     def _init_hat(self):
+        """Initialise the MCC-134 board if present."""
         try:
-            hats=hat_list(HatIDs.MCC_134)
-            if not hats: return None
-            addr=hats[0].address
-            with contextlib.redirect_stderr(open(os.devnull,"w")):
-                hat=mcc134(addr)
-                for ch in range(4): hat.tc_type_write(ch,TcTypes.TYPE_K)
+            hats = hat_list(HatIDs.MCC_134)
+            if not hats:
+                return None
+            addr = hats[0].address
+            with contextlib.redirect_stderr(open(os.devnull, "w")):
+                hat = mcc134(addr)
+                for ch in range(4):
+                    hat.tc_type_write(ch, TcTypes.TYPE_K)
             return hat
-        except: return None
+        except OSError as e:
+            # gpiod_line_request_output failures end up here. Log a message so
+            # the user knows to check GPIO permissions.
+            logging.error("MCC-134 init failed: %s", e)
+            return None
+        except Exception:
+            return None
     def _tc_worker(self):
         while not self.stop.is_set():
             if self.hat:
@@ -530,8 +539,10 @@ class UnifiedMonitor(ttk.Frame):
             self.ax.set_ylim(ymin-pad, ymax+pad)
         self.ax.set_ylabel("Temperature (°C)")
 
-        locator=AutoDateLocator(minticks=4,maxticks=8,interval_multiples=True)
-        fmt=ConciseDateFormatter(locator)
+        locator = AutoDateLocator(minticks=4, maxticks=8, interval_multiples=True)
+        # help AutoDateLocator with short time spans
+        locator.intervald[matplotlib.dates.MINUTELY] = [1, 2, 5, 10, 15, 30]
+        fmt = ConciseDateFormatter(locator)
         all_t=list(d.Time)+list(f.Time)
         if all_t:
             xmin,xmax=min(all_t),max(all_t);  xmax=(xmin+timedelta(seconds=1)) if xmin==xmax else xmax
@@ -600,11 +611,27 @@ class UnifiedMonitor(ttk.Frame):
         # average down to keep file light
         cl=self._avg_df(cl,["Temp","Clock","rel_min"]); fl=self._avg_df(fl,["Temp","rel_min"])
 
-        # pivot
-        cw=cl.pivot_table(index="rel_min",columns="Node",values="Clock").reset_index()
-        sw=cl.pivot_table(index="rel_min",columns="Node",values="Temp").reset_index()
+        # pivot (ensure only numeric columns are aggregated)
+        cl["Clock"] = pd.to_numeric(cl["Clock"], errors="coerce")
+        cl["Temp"] = pd.to_numeric(cl["Temp"], errors="coerce")
+        cw = (
+            cl[["rel_min", "Node", "Clock"]]
+            .pivot_table(index="rel_min", columns="Node", values="Clock")
+            .reset_index()
+        )
+        sw = (
+            cl[["rel_min", "Node", "Temp"]]
+            .pivot_table(index="rel_min", columns="Node", values="Temp")
+            .reset_index()
+        )
         if not fl.empty:
-            fl=fl.pivot_table(index="rel_min",columns="Channel",values="Temp").reset_index().rename(columns=self.NAMES)
+            fl["Temp"] = pd.to_numeric(fl["Temp"], errors="coerce")
+            fl = (
+                fl[["rel_min", "Channel", "Temp"]]
+                .pivot_table(index="rel_min", columns="Channel", values="Temp")
+                .reset_index()
+                .rename(columns=self.NAMES)
+            )
 
         with pd.ExcelWriter(path,engine="xlsxwriter") as xw:
             cw.to_excel(xw,"clock",index=False); sw.to_excel(xw,"soc",index=False)
