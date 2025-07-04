@@ -381,10 +381,14 @@ class UnifiedMonitor(ttk.Frame):
         now=datetime.now()
         bg,fg,txt="white","black","Idle"; enable_skip=False
         if self.waiting:
-            rem=self.wait_end-now
-            if rem.total_seconds()<=0: self.waiting=False; self._run_stress(); return
-            txt=f"Waiting: {rem.seconds//60:02}:{rem.seconds%60:02}"
-            bg,fg="yellow","black"
+            rem = self.wait_end - now
+            if rem.total_seconds() <= 0:
+                self.waiting = False
+                self._run_stress()
+                self.tick_id = self.after(1000, self._tick)
+                return
+            txt = f"Waiting: {rem.seconds//60:02}:{rem.seconds%60:02}"
+            bg, fg = "yellow", "black"
         elif self.stress_running:
             rem=self.stress_end-now
             if rem.total_seconds()<=0: self._stop_stress()
