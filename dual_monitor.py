@@ -165,9 +165,14 @@ class UnifiedMonitor(ttk.Frame):
         top=ttk.Frame(self); top.pack(fill=tk.X)
         ttk.Button(top,text="Start Log",command=self._start_log).pack(side=tk.LEFT,padx=4)
         ttk.Button(top,text="Stop Log", command=self._stop_log).pack(side=tk.LEFT,padx=4)
-        self.skip_btn=ttk.Button(top,text="Skip Cooling",state=tk.DISABLED,command=self._skip_cooling)
+        self.skip_btn = ttk.Button(
+            top,
+            text="Skip Cooling",
+            state=tk.DISABLED,
+            command=self._ask_skip_cooling,
+        )
         self.skip_btn.pack(side=tk.LEFT,padx=4)
-        ttk.Button(top,text="Save XLSX",command=lambda:self._write_excel('manual')).pack(side=tk.LEFT,padx=4)
+        ttk.Button(top,text="Save XLSX",command=self._ask_write_excel).pack(side=tk.LEFT,padx=4)
         ttk.Button(top,text="Clear ALL",command=self._clear_all).pack(side=tk.LEFT,padx=4)
         self.reboot_btn=ttk.Button(top,text="Reboot Nodes",command=self._ask_reboot_nodes)
         self.reboot_btn.pack(side=tk.LEFT,padx=6)
@@ -183,7 +188,7 @@ class UnifiedMonitor(ttk.Frame):
         self._add_spinner(st,"Wait",0  ,attr="wait_min")
         self.start_btn=ttk.Button(st,text="Start Stress",command=self._start_sequence)
         self.start_btn.pack(side=tk.LEFT,padx=8)
-        self.stop_btn =ttk.Button(st,text="Stop",state=tk.DISABLED,command=self._stop_stress)
+        self.stop_btn =ttk.Button(st,text="Stop",state=tk.DISABLED,command=self._ask_stop_stress)
         self.stop_btn.pack(side=tk.LEFT)
 
         # ---------- single row: events + banners ----------
@@ -261,10 +266,23 @@ class UnifiedMonitor(ttk.Frame):
     def _stop_log(self):
         if self.logging:
             self._write_excel('manual'); self.logging=False; self.log_msg("Log stopped")
-    def _skip_cooling(self):
-        if self.logging:
-            self._write_excel('stress'); self.logging=False; self.log_stress=False
-            self.skip_btn.config(state=tk.DISABLED); self.log_msg("Cooling skipped")
+    def _skip_cooling(self) -> None:
+        """Finalize the log immediately."""
+        self._write_excel("stress")
+        self.logging = False
+        self.log_stress = False
+        self.skip_btn.config(state=tk.DISABLED)
+        self.log_msg("Cooling skipped")
+
+    def _ask_skip_cooling(self) -> None:
+        if self.logging and messagebox.askyesno(
+            "Skip cooling", "Skip cooling and finalize log?"
+        ):
+            self._skip_cooling()
+
+    def _ask_write_excel(self) -> None:
+        if messagebox.askyesno("Save XLSX", "Save data to an Excel file?"):
+            self._write_excel('manual')
 
     # ───── reboot nodes button ─────
     def _ask_reboot_nodes(self):
@@ -292,7 +310,10 @@ class UnifiedMonitor(ttk.Frame):
 
     # ───── sequence (WAIT → STRESS) ─────
     def _start_sequence(self):
-        if self.waiting or self.stress_running: return
+        if self.waiting or self.stress_running:
+            return
+        if not messagebox.askyesno("Start stress", "Begin the stress sequence?"):
+            return
         wmin=self.wait_min.get()
         if wmin>0:
             self.waiting=True
@@ -318,6 +339,10 @@ class UnifiedMonitor(ttk.Frame):
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self.log_msg(f"Stress started ({self.stress_min.get()} min)")
+
+    def _ask_stop_stress(self) -> None:
+        if messagebox.askyesno("Stop stress", "Stop the stress run?"):
+            self._stop_stress()
 
     def _stop_stress(self):
         self._kill_stress(); self.stress_running=False
@@ -533,8 +558,8 @@ class UnifiedMonitor(ttk.Frame):
         ts=datetime.now().strftime("%Y-%m-%d_%H%M")
         path=Path(CSV_DIR)/f"monitor_{ts}_{tag}.xlsx"
 
-        if tag=="stress" and self.stress_start:
-            offset=max(10, self.wait_minutes_effective)
+        if tag == "stress" and self.stress_start:
+            offset = max(10, self.wait_minutes_effective)
             t0 = self.stress_start - timedelta(minutes=offset)
             t1 = self.cool_end
 
@@ -542,17 +567,25 @@ class UnifiedMonitor(ttk.Frame):
             self.soc_writer.flush()
             self.fluid_writer.flush()
 
-            if RAW_SOC.exists():
-                soc_src = pd.read_csv(RAW_SOC, parse_dates=["Time"])
-                cl = soc_src[(soc_src.Time >= t0) & (soc_src.Time <= t1)].reset_index(drop=True)
+            soc_cols = ["Time", "Node", "Temp", "Clock"]
+            if RAW_SOC.exists() and RAW_SOC.stat().st_size > 0:
+                try:
+                    soc_src = pd.read_csv(RAW_SOC, parse_dates=["Time"])
+                except Exception:
+                    soc_src = pd.DataFrame(columns=soc_cols)
             else:
-                cl = pd.DataFrame(columns=["Time", "Node", "Temp", "Clock"])
+                soc_src = pd.DataFrame(columns=soc_cols)
+            cl = soc_src[(soc_src.Time >= t0) & (soc_src.Time <= t1)].reset_index(drop=True) if not soc_src.empty else soc_src
 
-            if RAW_FLUID.exists():
-                fl_src = pd.read_csv(RAW_FLUID, parse_dates=["Time"])
-                fl = fl_src[(fl_src.Time >= t0) & (fl_src.Time <= t1)].reset_index(drop=True)
+            fl_cols = ["Time", "Channel", "Temp"]
+            if RAW_FLUID.exists() and RAW_FLUID.stat().st_size > 0:
+                try:
+                    fl_src = pd.read_csv(RAW_FLUID, parse_dates=["Time"])
+                except Exception:
+                    fl_src = pd.DataFrame(columns=fl_cols)
             else:
-                fl = pd.DataFrame(columns=["Time", "Channel", "Temp"])
+                fl_src = pd.DataFrame(columns=fl_cols)
+            fl = fl_src[(fl_src.Time >= t0) & (fl_src.Time <= t1)].reset_index(drop=True) if not fl_src.empty else fl_src
         else:
             with self.cl_lock: cl=self.cl_df.copy().reset_index(drop=True)
             with self.tc_lock: fl=self.tc_df.copy().reset_index(drop=True)
@@ -595,8 +628,12 @@ class UnifiedMonitor(ttk.Frame):
 
     # ───── clear ─────
     def _clear_all(self):
-        with self.cl_lock: self.cl_df=self.cl_df.iloc[0:0]
-        with self.tc_lock: self.tc_df=self.tc_df.iloc[0:0]
+        if not messagebox.askyesno("Clear data", "Remove all collected data?"):
+            return
+        with self.cl_lock:
+            self.cl_df = self.cl_df.iloc[0:0]
+        with self.tc_lock:
+            self.tc_df = self.tc_df.iloc[0:0]
         self.log_msg("Data cleared")
 
     # ───── shutdown ─────
