@@ -556,11 +556,24 @@ class UnifiedMonitor(ttk.Frame):
         self.plot_id=self.after(1000,self._refresh_plot) if not self.stop.is_set() else None
 
     # ───── Excel export ─────
-    def _avg_df(self,df,cols):
-        if df.empty: return df
-        n=len(df); k=max(1,n//AVG_BUCKET)
-        return (df.groupby(df.index//k)[cols]
-                .mean().reset_index(drop=True).join(df.loc[df.index[::k],["Time"]].reset_index(drop=True)))
+    def _avg_df(self, df, cols, keep=None):
+        """Average ``cols`` over ``AVG_BUCKET`` while preserving ``keep``."""
+        if df.empty:
+            return df
+        if keep is None:
+            keep = []
+        n = len(df)
+        k = max(1, n // AVG_BUCKET)
+        g = df.groupby(df.index // k)
+        avg = g[cols].mean().reset_index(drop=True)
+        keep_df = (
+            g[keep + ["Time"]]
+            .first()
+            .reset_index(drop=True)
+            if keep or "Time" in df.columns
+            else pd.DataFrame()
+        )
+        return avg.join(keep_df)
     def _write_excel(self, tag):
         if not self.logging: return
         try: import xlsxwriter
@@ -608,8 +621,9 @@ class UnifiedMonitor(ttk.Frame):
         cl["rel_min"]=cl["Time"].sub(ref).dt.total_seconds().div(60)
         fl["rel_min"]=fl["Time"].sub(ref).dt.total_seconds().div(60)
 
-        # average down to keep file light
-        cl=self._avg_df(cl,["Temp","Clock","rel_min"]); fl=self._avg_df(fl,["Temp","rel_min"])
+        # average down to keep file light while retaining node/channel info
+        cl = self._avg_df(cl, ["Temp", "Clock", "rel_min"], ["Node"])
+        fl = self._avg_df(fl, ["Temp", "rel_min"], ["Channel"])
 
         # pivot (ensure only numeric columns are aggregated)
         cl["Clock"] = pd.to_numeric(cl["Clock"], errors="coerce")
