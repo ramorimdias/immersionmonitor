@@ -558,8 +558,8 @@ class UnifiedMonitor(ttk.Frame):
         ts=datetime.now().strftime("%Y-%m-%d_%H%M")
         path=Path(CSV_DIR)/f"monitor_{ts}_{tag}.xlsx"
 
-        if tag=="stress" and self.stress_start:
-            offset=max(10, self.wait_minutes_effective)
+        if tag == "stress" and self.stress_start:
+            offset = max(10, self.wait_minutes_effective)
             t0 = self.stress_start - timedelta(minutes=offset)
             t1 = self.cool_end
 
@@ -567,17 +567,25 @@ class UnifiedMonitor(ttk.Frame):
             self.soc_writer.flush()
             self.fluid_writer.flush()
 
-            if RAW_SOC.exists():
-                soc_src = pd.read_csv(RAW_SOC, parse_dates=["Time"])
-                cl = soc_src[(soc_src.Time >= t0) & (soc_src.Time <= t1)].reset_index(drop=True)
+            soc_cols = ["Time", "Node", "Temp", "Clock"]
+            if RAW_SOC.exists() and RAW_SOC.stat().st_size > 0:
+                try:
+                    soc_src = pd.read_csv(RAW_SOC, parse_dates=["Time"])
+                except Exception:
+                    soc_src = pd.DataFrame(columns=soc_cols)
             else:
-                cl = pd.DataFrame(columns=["Time", "Node", "Temp", "Clock"])
+                soc_src = pd.DataFrame(columns=soc_cols)
+            cl = soc_src[(soc_src.Time >= t0) & (soc_src.Time <= t1)].reset_index(drop=True) if not soc_src.empty else soc_src
 
-            if RAW_FLUID.exists():
-                fl_src = pd.read_csv(RAW_FLUID, parse_dates=["Time"])
-                fl = fl_src[(fl_src.Time >= t0) & (fl_src.Time <= t1)].reset_index(drop=True)
+            fl_cols = ["Time", "Channel", "Temp"]
+            if RAW_FLUID.exists() and RAW_FLUID.stat().st_size > 0:
+                try:
+                    fl_src = pd.read_csv(RAW_FLUID, parse_dates=["Time"])
+                except Exception:
+                    fl_src = pd.DataFrame(columns=fl_cols)
             else:
-                fl = pd.DataFrame(columns=["Time", "Channel", "Temp"])
+                fl_src = pd.DataFrame(columns=fl_cols)
+            fl = fl_src[(fl_src.Time >= t0) & (fl_src.Time <= t1)].reset_index(drop=True) if not fl_src.empty else fl_src
         else:
             with self.cl_lock: cl=self.cl_df.copy().reset_index(drop=True)
             with self.tc_lock: fl=self.tc_df.copy().reset_index(drop=True)
