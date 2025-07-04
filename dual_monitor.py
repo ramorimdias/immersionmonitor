@@ -581,7 +581,7 @@ class UnifiedMonitor(ttk.Frame):
             agg["Time"] = "first"
 
         out = g.agg(agg).reset_index()
-        out.pop("_bucket", None)
+        out = out.drop(columns="_bucket", errors="ignore")
         return out
     def _write_excel(self, tag):
         if not self.logging: return
