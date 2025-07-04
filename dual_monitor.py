@@ -57,6 +57,48 @@ CSV_DIR: Path
 RAW_SOC: Path
 RAW_FLUID: Path
 
+# UI translations
+TRANSLATIONS = {
+    "Start Log": {"EN": "Start Log", "FR": "Démarrer log"},
+    "Stop Log": {"EN": "Stop Log", "FR": "Arrêter log"},
+    "Skip Cooling": {"EN": "Skip Cooling", "FR": "Ignorer refroidissement"},
+    "Save XLSX": {"EN": "Save XLSX", "FR": "Enregistrer XLSX"},
+    "Clear ALL": {"EN": "Clear ALL", "FR": "Tout effacer"},
+    "Reboot Nodes": {"EN": "Reboot Nodes", "FR": "Redémarrer nœuds"},
+    "Idle": {"EN": "Idle", "FR": "Inactif"},
+    "Full Screen": {"EN": "Full Screen", "FR": "Plein écran"},
+    "Windowed": {"EN": "Windowed", "FR": "Fenêtré"},
+    "Stress": {"EN": "Stress", "FR": "Stress"},
+    "Cooling": {"EN": "Cooling", "FR": "Refroidissement"},
+    "Wait": {"EN": "Wait", "FR": "Attente"},
+    "Start Stress": {"EN": "Start Stress", "FR": "Démarrer stress"},
+    "Stop": {"EN": "Stop", "FR": "Arrêter"},
+    "HAT ?": {"EN": "HAT ?", "FR": "HAT ?"},
+    "Nodes ?": {"EN": "Nodes ?", "FR": "Nœuds ?"},
+    "Temp ±10 °C": {"EN": "Temp ±10 °C", "FR": "Temp ±10 °C"},
+    "MCC-134 HAT : OK": {"EN": "MCC-134 HAT : OK", "FR": "MCC-134 HAT : OK"},
+    "MCC-134 HAT : NOT FOUND": {"EN": "MCC-134 HAT : NOT FOUND", "FR": "MCC-134 HAT : NON TROUVÉ"},
+    "Nodes missing: ": {"EN": "Nodes missing: ", "FR": "Nœuds manquants : "},
+    "All nodes reachable": {"EN": "All nodes reachable", "FR": "Tous les nœuds accessibles"},
+    "Config": {"EN": "Config", "FR": "Config"},
+    "Clear data": {"EN": "Clear data", "FR": "Effacer les données"},
+    "Remove all collected data?": {"EN": "Remove all collected data?", "FR": "Supprimer toutes les données collectées ?"},
+    "Reboot all nodes": {"EN": "Reboot all nodes", "FR": "Redémarrer tous les nœuds"},
+    "Reboot ALL worker Raspberry Pis (host stays up)?": {"EN": "Reboot ALL worker Raspberry Pis (host stays up)?", "FR": "Redémarrer TOUS les Raspberry Pi (l’hôte reste actif) ?"},
+    "Start stress": {"EN": "Start stress", "FR": "Démarrer le stress"},
+    "Begin the stress sequence?": {"EN": "Begin the stress sequence?", "FR": "Commencer la séquence de stress ?"},
+    "Stop stress": {"EN": "Stop stress", "FR": "Arrêter le stress"},
+    "Stop the stress run?": {"EN": "Stop the stress run?", "FR": "Arrêter l’exécution du stress ?"},
+    "stress-ng not installed": {"EN": "stress-ng not installed", "FR": "stress-ng non installé"},
+    "Skip cooling": {"EN": "Skip cooling", "FR": "Ignorer le refroidissement"},
+    "Skip cooling and finalize log?": {"EN": "Skip cooling and finalize log?", "FR": "Ignorer le refroidissement et finaliser le journal ?"},
+    "Save data to an Excel file?": {"EN": "Save data to an Excel file?", "FR": "Enregistrer les données dans un fichier Excel ?"},
+    "Temperature (°C)": {"EN": "Temperature (°C)", "FR": "Température (°C)"},
+    "Time": {"EN": "Time", "FR": "Temps"},
+    "minutes": {"EN": "minutes", "FR": "minutes"},
+    "Logging…": {"EN": "Logging…", "FR": "Enregistrement…"},
+}
+
 
 class DataWriter:
     """Accumulate rows and write them to CSV periodically."""
@@ -117,6 +159,29 @@ class UnifiedMonitor(ttk.Frame):
     NAMES = {0: "cold fluid", 1: "hot air", 2: "cold air", 3: "hot fluid"}
     FLUID_ORDER = [3, 0, 1, 2]
 
+    def tr(self, text: str) -> str:
+        """Return the translation for ``text`` in the current language."""
+        return TRANSLATIONS.get(text, {}).get(self.lang, text)
+
+    def _toggle_lang(self) -> None:
+        self.lang = "FR" if self.lang == "EN" else "EN"
+        self._apply_lang()
+
+    def _apply_lang(self) -> None:
+        """Update all static UI text to match ``self.lang``."""
+        self.start_log_btn.config(text=self.tr("Start Log"))
+        self.stop_log_btn.config(text=self.tr("Stop Log"))
+        self.skip_btn.config(text=self.tr("Skip Cooling"))
+        self.save_btn.config(text=self.tr("Save XLSX"))
+        self.clear_btn.config(text=self.tr("Clear ALL"))
+        self.reboot_btn.config(text=self.tr("Reboot Nodes"))
+        fs = self.master.attributes("-fullscreen")
+        self.full_btn.config(text=self.tr("Windowed") if fs else self.tr("Full Screen"))
+        self.lang_btn.config(text="EN" if self.lang == "FR" else "FR")
+        for key, lbl in self.spinner_labels.items():
+            lbl.config(text=f"{self.tr(key)} (min):")
+        self._show_connection_status()
+
     def __init__(self, master: tk.Tk, headless: bool = False) -> None:
         super().__init__(master)
         self.headless = headless
@@ -142,6 +207,9 @@ class UnifiedMonitor(ttk.Frame):
         self.log = deque(maxlen=2)
         self.log_labels: list[tk.Label] = []
 
+        self.lang = "EN"
+        self.spinner_labels: dict[str, tk.Label] = {}
+
         if not self.headless:
             self._build_ui()
         self.local_ip=socket.gethostbyname(socket.gethostname())
@@ -164,23 +232,29 @@ class UnifiedMonitor(ttk.Frame):
     def _build_ui(self):
         # ---------- top bar ----------
         top=ttk.Frame(self); top.pack(fill=tk.X)
-        ttk.Button(top,text="Start Log",command=self._start_log).pack(side=tk.LEFT,padx=4)
-        ttk.Button(top,text="Stop Log", command=self._stop_log).pack(side=tk.LEFT,padx=4)
+        self.start_log_btn = ttk.Button(top, text=self.tr("Start Log"), command=self._start_log)
+        self.start_log_btn.pack(side=tk.LEFT,padx=4)
+        self.stop_log_btn = ttk.Button(top, text=self.tr("Stop Log"), command=self._stop_log)
+        self.stop_log_btn.pack(side=tk.LEFT,padx=4)
         self.skip_btn = ttk.Button(
             top,
-            text="Skip Cooling",
+            text=self.tr("Skip Cooling"),
             state=tk.DISABLED,
             command=self._ask_skip_cooling,
         )
         self.skip_btn.pack(side=tk.LEFT,padx=4)
-        ttk.Button(top,text="Save XLSX",command=self._ask_write_excel).pack(side=tk.LEFT,padx=4)
-        ttk.Button(top,text="Clear ALL",command=self._clear_all).pack(side=tk.LEFT,padx=4)
-        self.reboot_btn=ttk.Button(top,text="Reboot Nodes",command=self._ask_reboot_nodes)
+        self.save_btn = ttk.Button(top, text=self.tr("Save XLSX"), command=self._ask_write_excel)
+        self.save_btn.pack(side=tk.LEFT,padx=4)
+        self.clear_btn = ttk.Button(top, text=self.tr("Clear ALL"), command=self._clear_all)
+        self.clear_btn.pack(side=tk.LEFT,padx=4)
+        self.reboot_btn=ttk.Button(top,text=self.tr("Reboot Nodes"),command=self._ask_reboot_nodes)
         self.reboot_btn.pack(side=tk.LEFT,padx=6)
-        self.status_lbl=ttk.Label(top,text="Idle",width=20,anchor="center",background="white")
+        self.status_lbl=ttk.Label(top,text=self.tr("Idle"),width=20,anchor="center",background="white")
         self.status_lbl.pack(side=tk.LEFT,padx=12)
-        self.full_btn=ttk.Button(top,text="Full Screen",command=self._toggle_full)
+        self.full_btn=ttk.Button(top,text=self.tr("Full Screen"),command=self._toggle_full)
         self.full_btn.pack(side=tk.RIGHT,padx=4)
+        self.lang_btn=ttk.Button(top,text="FR",command=self._toggle_lang,width=4)
+        self.lang_btn.pack(side=tk.RIGHT,padx=4)
 
         # ---------- spinners ----------
         st=ttk.Frame(self); st.pack(fill=tk.X)
@@ -212,12 +286,14 @@ class UnifiedMonitor(ttk.Frame):
 
         # ---------- zoom ----------
         z=ttk.Frame(self); z.pack(fill=tk.X,pady=2)
-        ttk.Label(z,text="Temp ±10 °C").pack(side=tk.LEFT,padx=(6,0))
+        ttk.Label(z,text=self.tr("Temp ±10 °C")).pack(side=tk.LEFT,padx=(6,0))
         ttk.Button(z,text="+",width=3,command=lambda:self._zoom(-10)).pack(side=tk.LEFT)
         ttk.Button(z,text="-",width=3,command=lambda:self._zoom( 10)).pack(side=tk.LEFT)
 
     def _add_spinner(self,frame,label,default,attr):
-        ttk.Label(frame,text=f"{label} (min):").pack(side=tk.LEFT,padx=(6,2))
+        lbl=ttk.Label(frame,text=f"{self.tr(label)} (min):")
+        lbl.pack(side=tk.LEFT,padx=(6,2))
+        self.spinner_labels[label]=lbl
         var=tk.IntVar(value=default); setattr(self,attr,var)
         ttk.Entry(frame,textvariable=var,width=6).pack(side=tk.LEFT)
         ttk.Button(frame,text="+5",width=3,command=lambda v=var:v.set(v.get()+5)).pack(side=tk.LEFT,padx=2)
@@ -227,32 +303,33 @@ class UnifiedMonitor(ttk.Frame):
     def log_msg(self, msg: str) -> None:
         """Add a message to the GUI log and the logger."""
         logging.info(msg)
-        self.log.appendleft(f"{datetime.now():%H:%M:%S}  {msg}")
+        disp = self.tr(msg)
+        self.log.appendleft(f"{datetime.now():%H:%M:%S}  {disp}")
         for i, lb in enumerate(self.log_labels):
             lb.config(text=self.log[i] if i < len(self.log) else "")
 
     # ───── banner helpers ─────
     def _show_connection_status(self):
         if hat_list(HatIDs.MCC_134):
-            self.hat_banner.configure(text="MCC-134 HAT : OK",background="green",foreground="white")
+            self.hat_banner.configure(text=self.tr("MCC-134 HAT : OK"),background="green",foreground="white")
         else:
-            self.hat_banner.configure(text="MCC-134 HAT : NOT FOUND",background="red",foreground="white")
+            self.hat_banner.configure(text=self.tr("MCC-134 HAT : NOT FOUND"),background="red",foreground="white")
         bad=[]
         for ip in set(self.node_ips):
             try: subprocess.check_output(f"ssh {SSH_OPTS} pi@{ip} 'echo ok'",shell=True,timeout=4)
             except subprocess.SubprocessError: bad.append(ip)
         if bad:
-            self.node_banner.configure(text="Nodes missing: "+", ".join(bad),
+            self.node_banner.configure(text=self.tr("Nodes missing: ")+", ".join(bad),
                                        background="red",foreground="white")
         else:
-            self.node_banner.configure(text="All nodes reachable",
+            self.node_banner.configure(text=self.tr("All nodes reachable"),
                                        background="green",foreground="white")
 
     # ───── helpers ─────
     def _toggle_full(self):
         fs=self.master.attributes("-fullscreen")
         self.master.attributes("-fullscreen",not fs)
-        self.full_btn.config(text="Windowed" if not fs else "Full Screen")
+        self.full_btn.config(text=self.tr("Windowed") if not fs else self.tr("Full Screen"))
     def _zoom(self,delta):
         self.manual_ylim=True
         mid=sum(self.temp_ylim)/2
@@ -277,18 +354,18 @@ class UnifiedMonitor(ttk.Frame):
 
     def _ask_skip_cooling(self) -> None:
         if self.logging and messagebox.askyesno(
-            "Skip cooling", "Skip cooling and finalize log?"
+            self.tr("Skip cooling"), self.tr("Skip cooling and finalize log?")
         ):
             self._skip_cooling()
 
     def _ask_write_excel(self) -> None:
-        if messagebox.askyesno("Save XLSX", "Save data to an Excel file?"):
+        if messagebox.askyesno(self.tr("Save XLSX"), self.tr("Save data to an Excel file?")):
             self._write_excel('manual')
 
     # ───── reboot nodes button ─────
     def _ask_reboot_nodes(self):
-        if not messagebox.askyesno("Reboot all nodes",
-                                   "Reboot ALL worker Raspberry Pis (host stays up)?"):
+        if not messagebox.askyesno(self.tr("Reboot all nodes"),
+                                   self.tr("Reboot ALL worker Raspberry Pis (host stays up)?")):
             return
         self.reboot_btn.configure(state=tk.DISABLED)
         Thread(target=self._do_reboot_nodes,daemon=True).start()
@@ -313,7 +390,7 @@ class UnifiedMonitor(ttk.Frame):
     def _start_sequence(self):
         if self.waiting or self.stress_running:
             return
-        if not messagebox.askyesno("Start stress", "Begin the stress sequence?"):
+        if not messagebox.askyesno(self.tr("Start stress"), self.tr("Begin the stress sequence?")):
             return
         wmin=self.wait_min.get()
         if wmin>0:
@@ -330,7 +407,7 @@ class UnifiedMonitor(ttk.Frame):
     def _run_stress(self):
         secs=self.stress_min.get()*60
         if not shutil.which("stress-ng"):
-            messagebox.showerror("stress-ng","stress-ng not installed"); return
+            messagebox.showerror("stress-ng", self.tr("stress-ng not installed")); return
         if not self.logging: self.logging=True
         self.log_stress=True; self.stress_running=True
         self.stress_start=datetime.now()
@@ -342,7 +419,7 @@ class UnifiedMonitor(ttk.Frame):
         self.log_msg(f"Stress started ({self.stress_min.get()} min)")
 
     def _ask_stop_stress(self) -> None:
-        if messagebox.askyesno("Stop stress", "Stop the stress run?"):
+        if messagebox.askyesno(self.tr("Stop stress"), self.tr("Stop the stress run?")):
             self._stop_stress()
 
     def _stop_stress(self):
@@ -379,17 +456,17 @@ class UnifiedMonitor(ttk.Frame):
     def _tick(self):
         if self.stop.is_set(): return
         now=datetime.now()
-        bg,fg,txt="white","black","Idle"; enable_skip=False
+        bg,fg,txt="white","black",self.tr("Idle"); enable_skip=False
         if self.waiting:
             rem=self.wait_end-now
             if rem.total_seconds()<=0: self.waiting=False; self._run_stress(); return
-            txt=f"Waiting: {rem.seconds//60:02}:{rem.seconds%60:02}"
+            txt=f"{self.tr('Waiting')}: {rem.seconds//60:02}:{rem.seconds%60:02}"
             bg,fg="yellow","black"
         elif self.stress_running:
             rem=self.stress_end-now
             if rem.total_seconds()<=0: self._stop_stress()
             else:
-                txt=f"Stress: {rem.seconds//60:02}:{rem.seconds%60:02}"
+                txt=f"{self.tr('Stress')}: {rem.seconds//60:02}:{rem.seconds%60:02}"
                 bg,fg="red","white"
         elif self.logging and self.log_stress:
             rem=self.cool_end-now
@@ -397,9 +474,9 @@ class UnifiedMonitor(ttk.Frame):
                 self._write_excel('stress')
                 self.logging=False; self.log_stress=False; self.log_msg("Cooling finished")
             else:
-                txt=f"Cooling: {rem.seconds//60:02}:{rem.seconds%60:02}"
+                txt=f"{self.tr('Cooling')}: {rem.seconds//60:02}:{rem.seconds%60:02}"
                 bg,fg="blue","white"; enable_skip=True
-        elif self.logging: txt,bg,fg="Logging…","lightgreen","black"
+        elif self.logging: txt,bg,fg=self.tr("Logging…"),"lightgreen","black"
         self.status_lbl.configure(text=txt,background=bg,foreground=fg)
         self.skip_btn.configure(state=tk.NORMAL if enable_skip else tk.DISABLED)
         self.tick_id=self.after(1000,self._tick)
@@ -407,7 +484,7 @@ class UnifiedMonitor(ttk.Frame):
     # ───── node polling + raw CSV ─────
     def _load_nodes(self):
         if not os.path.exists(NODES_FILE):
-            messagebox.showerror("Config",f"{NODES_FILE} missing"); sys.exit(1)
+            messagebox.showerror(self.tr("Config"), f"{NODES_FILE} missing"); sys.exit(1)
         ips=[]
         with open(NODES_FILE) as f:
             for ln in f:
@@ -538,7 +615,7 @@ class UnifiedMonitor(ttk.Frame):
         elif all_vals:
             ymin=min(all_vals); ymax=max(all_vals); pad=5
             self.ax.set_ylim(ymin-pad, ymax+pad)
-        self.ax.set_ylabel("Temperature (°C)")
+        self.ax.set_ylabel(self.tr("Temperature (°C)"))
 
         locator = AutoDateLocator(minticks=4, maxticks=8, interval_multiples=True)
         # help AutoDateLocator with short time spans
@@ -553,7 +630,7 @@ class UnifiedMonitor(ttk.Frame):
         self.ax.yaxis.grid(True,ls="--",lw=0.5)
         if lines:
             self.ax.legend(lines,labels,loc="upper left",bbox_to_anchor=LEGEND_ANCHOR,fontsize=14)
-        self.ax.set_xlabel("Time")
+        self.ax.set_xlabel(self.tr("Time"))
         self.canvas.draw()
         self.plot_id=self.after(1000,self._refresh_plot) if not self.stop.is_set() else None
 
@@ -685,7 +762,7 @@ class UnifiedMonitor(ttk.Frame):
                             "values": [sheet, 1, col, rows, col],
                         }
                     )
-                ch.set_x_axis({"name": "minutes"})
+                ch.set_x_axis({"name": self.tr("minutes")})
                 ch.set_y_axis({"name": y})
                 xw.sheets[sheet].insert_chart("H2", ch)
             chart(cw,"clock","GHz"); chart(sw,"soc","°C")
@@ -699,7 +776,7 @@ class UnifiedMonitor(ttk.Frame):
 
     # ───── clear ─────
     def _clear_all(self):
-        if not messagebox.askyesno("Clear data", "Remove all collected data?"):
+        if not messagebox.askyesno(self.tr("Clear data"), self.tr("Remove all collected data?")):
             return
         with self.cl_lock:
             self.cl_df = self.cl_df.iloc[0:0]
