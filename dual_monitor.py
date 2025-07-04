@@ -610,15 +610,23 @@ class UnifiedMonitor(ttk.Frame):
             cw.to_excel(xw,"clock",index=False); sw.to_excel(xw,"soc",index=False)
             if not fl.empty: fl.to_excel(xw,"fluid",index=False)
             wb=xw.book
-            def chart(df,sheet,y):
-                rows=len(df)
-                ch=wb.add_chart({"type":"line"})
-                for col in range(1,len(df.columns)):
-                    ch.add_series({"name":[sheet,0,col],
-                                   "categories":[sheet,1,0,rows,0],   # rel_min as X
-                                   "values":[sheet,1,col,rows,col]})
-                ch.set_x_axis({"name":"minutes"}); ch.set_y_axis({"name":y})
-                xw.sheets[sheet].insert_chart("H2",ch)
+            def chart(df, sheet, y):
+                """Insert a line chart if there is at least one data series."""
+                if df.empty or len(df.columns) <= 1:
+                    return
+                rows = len(df)
+                ch = wb.add_chart({"type": "line"})
+                for col in range(1, len(df.columns)):
+                    ch.add_series(
+                        {
+                            "name": [sheet, 0, col],
+                            "categories": [sheet, 1, 0, rows, 0],  # rel_min as X
+                            "values": [sheet, 1, col, rows, col],
+                        }
+                    )
+                ch.set_x_axis({"name": "minutes"})
+                ch.set_y_axis({"name": y})
+                xw.sheets[sheet].insert_chart("H2", ch)
             chart(cw,"clock","GHz"); chart(sw,"soc","°C")
             if not fl.empty: chart(fl,"fluid","°C")
             for s in ("clock","soc","fluid"):
