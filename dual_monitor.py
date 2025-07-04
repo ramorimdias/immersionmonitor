@@ -541,6 +541,7 @@ class UnifiedMonitor(ttk.Frame):
 
         locator = AutoDateLocator(minticks=4, maxticks=8, interval_multiples=True)
         # help AutoDateLocator with short time spans
+        locator.intervald[matplotlib.dates.SECONDLY] = [1, 2, 5, 10, 15, 30]
         locator.intervald[matplotlib.dates.MINUTELY] = [1, 2, 5, 10, 15, 30]
         fmt = ConciseDateFormatter(locator)
         all_t=list(d.Time)+list(f.Time)
@@ -643,6 +644,7 @@ class UnifiedMonitor(ttk.Frame):
             fl = (
                 fl[["rel_min", "Channel", "Temp"]]
                 .pivot_table(index="rel_min", columns="Channel", values="Temp")
+                .reindex(columns=sorted(self.NAMES.keys()), fill_value=pd.NA)
                 .reset_index()
                 .rename(columns=self.NAMES)
             )
