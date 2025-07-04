@@ -671,8 +671,9 @@ class UnifiedMonitor(ttk.Frame):
                 # the time points are not equally spaced.
                 ch = wb.add_chart({
                     "type": "scatter",
-                    "subtype": "straight_with_markers",
+                    "subtype": "straight",  # lines only, no markers
                 })
+                ch.show_blanks_as("span")  # connect across blank cells
                 for col in range(1, len(df.columns)):
                     ch.add_series(
                         {
