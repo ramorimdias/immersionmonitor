@@ -19,7 +19,8 @@ MEM_CAP      = 100_000
 STRESS_CPUS  = 8
 SSH_OPTS     = "-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR"
 BIG_FONT     = ("Helvetica", 14)                # global UI font
-AVG_BUCKET   = 100                              # rows averaged → Excel
+AVG_BUCKET   = 100                              # fallback bucket count
+POINTS_PER_MIN = 2                              # ~2 points per minute
 # ─────────────────────────────────
 
 import os
@@ -558,23 +559,24 @@ class UnifiedMonitor(ttk.Frame):
 
     # ───── Excel export ─────
     def _avg_df(self, df, cols, keep=None):
-        """Average ``cols`` over ``AVG_BUCKET`` while preserving ``keep``."""
+        """Average ``cols`` to roughly ``POINTS_PER_MIN`` per minute."""
         if df.empty:
             return df
         if keep is None:
             keep = []
-        n = len(df)
-        k = max(1, n // AVG_BUCKET)
-        g = df.groupby(df.index // k)
+        if "rel_min" in df.columns:
+            bucket = 1 / max(POINTS_PER_MIN, 1)
+            g = df.groupby((df["rel_min"] // bucket).astype(int))
+        else:
+            n = len(df)
+            k = max(1, n // AVG_BUCKET)
+            g = df.groupby(df.index // k)
         avg = g[cols].mean().reset_index(drop=True)
-        keep_df = (
-            g[keep + ["Time"]]
-            .first()
-            .reset_index(drop=True)
-            if keep or "Time" in df.columns
-            else pd.DataFrame()
-        )
-        return avg.join(keep_df)
+        keep_cols = [c for c in keep + ["Time"] if c in df.columns]
+        if keep_cols:
+            keep_df = g[keep_cols].first().reset_index(drop=True)
+            avg = avg.join(keep_df)
+        return avg
     def _write_excel(self, tag):
         if not self.logging: return
         try: import xlsxwriter
