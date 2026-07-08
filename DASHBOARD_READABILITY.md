@@ -22,6 +22,7 @@ It changes the screen layout so the graph remains readable and the user can unde
 Graph and configuration are separated into two tabs
 The Graph tab gives the plot almost the full window
 The Graph tab uses a dark hero header, live summary chips, and a compact quick-actions bar
+The UI is tuned for touch screens with larger buttons, bigger text, and wider hit targets
 The Configuration / Workers tab keeps discovery, sequence settings, maintenance actions, and the worker table
 The new dashboard defaults to worker-agent discovery only
 It does not read /home/motul/nodes_ips unless --nodes-file is explicitly provided

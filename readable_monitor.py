@@ -29,6 +29,11 @@ class ReadableMonitor(core.UnifiedMonitor):
     """A clearer tabbed dashboard wrapped around ``dual_monitor.UnifiedMonitor``."""
 
     ONLINE_AFTER_SECONDS = 6
+    TOUCH_FONT = ("Helvetica", 12)
+    TOUCH_TITLE_FONT = ("Helvetica", 23, "bold")
+    TOUCH_LABEL_FONT = ("Helvetica", 12, "bold")
+    TOUCH_BUTTON_PAD = (14, 10)
+    TOUCH_ROWHEIGHT = 40
 
     def __init__(self, master: tk.Tk, headless: bool = False) -> None:
         self.metrics_lock = Lock()
@@ -62,6 +67,22 @@ class ReadableMonitor(core.UnifiedMonitor):
         ).pack(anchor="w", pady=(4, 0))
         return card
 
+    def _add_spinner(self, frame, label, default, attr):
+        """Build touch-friendly step controls with larger targets."""
+        tile = ttk.Frame(frame, style="Card.TFrame", padding=(8, 8))
+        tile.pack(fill=tk.X, pady=(0, 8))
+        ttk.Label(tile, text=f"{label} (min)", style="CardTitle.TLabel").pack(anchor="w")
+        row = ttk.Frame(tile, style="Card.TFrame")
+        row.pack(fill=tk.X, pady=(6, 0))
+        var = tk.IntVar(value=default)
+        setattr(self, attr, var)
+        entry = ttk.Entry(row, textvariable=var, width=8, font=self.TOUCH_FONT)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 8))
+        ttk.Button(row, text="-5", style="Action.TButton", command=lambda v=var: v.set(max(0, v.get() - 5))).pack(
+            side=tk.LEFT, padx=(0, 6)
+        )
+        ttk.Button(row, text="+5", style="Action.TButton", command=lambda v=var: v.set(v.get() + 5)).pack(side=tk.LEFT)
+
     def _build_ui(self) -> None:
         """Build a tabbed dashboard so the graph is not compressed by controls."""
         self.pack(fill=tk.BOTH, expand=True)
@@ -70,28 +91,28 @@ class ReadableMonitor(core.UnifiedMonitor):
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure(".", font=("Helvetica", 11), padding=4)
+        style.configure(".", font=self.TOUCH_FONT, padding=6)
         style.configure("Page.TFrame", background="#f5f7fb")
         style.configure("Hero.TFrame", background="#0f172a")
-        style.configure("HeroTitle.TLabel", background="#0f172a", foreground="#f8fafc", font=("Helvetica", 21, "bold"))
-        style.configure("HeroSub.TLabel", background="#0f172a", foreground="#cbd5e1", font=("Helvetica", 11))
-        style.configure("HeroChip.TLabel", background="#1e293b", foreground="#e2e8f0", font=("Helvetica", 10, "bold"), padding=(10, 4))
+        style.configure("HeroTitle.TLabel", background="#0f172a", foreground="#f8fafc", font=self.TOUCH_TITLE_FONT)
+        style.configure("HeroSub.TLabel", background="#0f172a", foreground="#cbd5e1", font=self.TOUCH_FONT)
+        style.configure("HeroChip.TLabel", background="#1e293b", foreground="#e2e8f0", font=("Helvetica", 11, "bold"), padding=(14, 8))
         style.configure("Card.TFrame", background="#ffffff")
-        style.configure("CardTitle.TLabel", background="#ffffff", foreground="#64748b", font=("Helvetica", 10, "bold"))
-        style.configure("CardValue.TLabel", background="#ffffff", foreground="#0f172a", font=("Helvetica", 13, "bold"))
+        style.configure("CardTitle.TLabel", background="#ffffff", foreground="#64748b", font=("Helvetica", 11, "bold"))
+        style.configure("CardValue.TLabel", background="#ffffff", foreground="#0f172a", font=("Helvetica", 14, "bold"))
         style.configure("Section.TLabelframe", background="#ffffff", relief="solid", borderwidth=1, padding=8)
-        style.configure("Section.TLabelframe.Label", font=("Helvetica", 13, "bold"), foreground="#334155")
+        style.configure("Section.TLabelframe.Label", font=("Helvetica", 14, "bold"), foreground="#334155")
         style.configure(
             "Status.TLabel",
             background="#ffffff",
             foreground="#0f172a",
-            font=("Helvetica", 13, "bold"),
-            padding=10,
+            font=("Helvetica", 14, "bold"),
+            padding=12,
         )
-        style.configure("Title.TLabel", background="#f5f7fb", foreground="#0f172a", font=("Helvetica", 18, "bold"))
-        style.configure("Node.Treeview", rowheight=30, font=("Helvetica", 12))
+        style.configure("Title.TLabel", background="#f5f7fb", foreground="#0f172a", font=("Helvetica", 19, "bold"))
+        style.configure("Node.Treeview", rowheight=self.TOUCH_ROWHEIGHT, font=("Helvetica", 12))
         style.configure("Node.Treeview.Heading", font=("Helvetica", 12, "bold"))
-        style.configure("Action.TButton", font=("Helvetica", 10, "bold"), padding=(10, 6))
+        style.configure("Action.TButton", font=("Helvetica", 11, "bold"), padding=self.TOUCH_BUTTON_PAD)
         self.master.configure(background="#f5f7fb")
         self.configure(style="Page.TFrame")
 
@@ -107,7 +128,7 @@ class ReadableMonitor(core.UnifiedMonitor):
             style="Status.TLabel",
         )
         self.status_lbl.pack(side=tk.LEFT, padx=16)
-        self.full_btn = ttk.Button(header, text="Full Screen", command=self._toggle_full)
+        self.full_btn = ttk.Button(header, text="Full Screen", style="Action.TButton", command=self._toggle_full)
         self.full_btn.pack(side=tk.RIGHT, padx=4)
 
         self.notebook = ttk.Notebook(self)
@@ -141,14 +162,14 @@ class ReadableMonitor(core.UnifiedMonitor):
             text="Immersion Bench Monitor",
             bg="#0f172a",
             fg="#f8fafc",
-            font=("Helvetica", 22, "bold"),
+            font=self.TOUCH_TITLE_FONT,
         ).pack(anchor="w")
         tk.Label(
             hero_left,
             text="A polished live view for discovery, stress runs, and temperature history.",
             bg="#0f172a",
             fg="#cbd5e1",
-            font=("Helvetica", 11),
+            font=self.TOUCH_FONT,
         ).pack(anchor="w", pady=(6, 0))
         chip_row = tk.Frame(hero_left, bg="#0f172a")
         chip_row.pack(anchor="w", pady=(12, 0))
@@ -163,9 +184,9 @@ class ReadableMonitor(core.UnifiedMonitor):
                 textvariable=self.summary_vars[key],
                 bg="#1e293b",
                 fg="#e2e8f0",
-                font=("Helvetica", 10, "bold"),
-                padx=12,
-                pady=5,
+                font=("Helvetica", 11, "bold"),
+                padx=14,
+                pady=7,
                 relief="flat",
             )
             chip.pack(side=tk.LEFT, padx=(0, 8))
@@ -200,6 +221,7 @@ class ReadableMonitor(core.UnifiedMonitor):
             text="Advanced timing, discovery, and worker management live on the second tab.",
             bg="#f5f7fb",
             fg="#64748b",
+            font=self.TOUCH_FONT,
         ).pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=12)
 
         cards = ttk.Frame(self.graph_tab, style="Page.TFrame")
@@ -209,7 +231,7 @@ class ReadableMonitor(core.UnifiedMonitor):
         self.graph_card_3 = self._card(cards, "Discovery", self.summary_vars["discovery"], "#f59e0b")
         self.graph_card_4 = self._card(cards, "Run state", self.summary_vars["activity"], "#8b5cf6")
         for card in (self.graph_card_1, self.graph_card_2, self.graph_card_3, self.graph_card_4):
-            card.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+            card.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipadx=2, ipady=2)
         self.graph_card_4.pack_configure(padx=0)
 
         self.fig, self.ax = core.plt.subplots(1, 1, figsize=core.FIGSIZE, dpi=core.PLOT_DPI)
@@ -220,9 +242,9 @@ class ReadableMonitor(core.UnifiedMonitor):
 
         zoom = ttk.Frame(self.graph_tab)
         zoom.pack(fill=tk.X, padx=6, pady=(0, 6))
-        ttk.Label(zoom, text="Temperature scale").pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(zoom, text="Zoom in", command=lambda: self._zoom(-10)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(zoom, text="Zoom out", command=lambda: self._zoom(10)).pack(side=tk.LEFT, padx=2)
+        ttk.Label(zoom, text="Temperature scale", font=self.TOUCH_FONT).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(zoom, text="Zoom in", style="Action.TButton", command=lambda: self._zoom(-10)).pack(side=tk.LEFT, padx=4)
+        ttk.Button(zoom, text="Zoom out", style="Action.TButton", command=lambda: self._zoom(10)).pack(side=tk.LEFT, padx=4)
 
     def _build_config_tab(self) -> None:
         """Configuration tab contains controls, discovery state, and worker details."""
@@ -287,12 +309,15 @@ class ReadableMonitor(core.UnifiedMonitor):
         )
         self.node_help_lbl.pack(fill=tk.X, padx=4, pady=(0, 4))
 
+        table_wrap = ttk.Frame(nodes_box, style="Page.TFrame")
+        table_wrap.pack(fill=tk.BOTH, expand=True)
+
         columns = ("state", "node", "ip", "source", "temp", "clock", "cpu", "last_seen")
         self.node_tree = ttk.Treeview(
-            nodes_box,
+            table_wrap,
             columns=columns,
             show="headings",
-            height=12,
+            height=11,
             style="Node.Treeview",
         )
         headings = {
@@ -321,7 +346,11 @@ class ReadableMonitor(core.UnifiedMonitor):
         self.node_tree.tag_configure("online", background="#dff4df")
         self.node_tree.tag_configure("offline", background="#f5d8d8")
         self.node_tree.tag_configure("waiting", background="#fff1c4")
-        self.node_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
+        node_scroll = ttk.Scrollbar(table_wrap, orient="vertical", command=self.node_tree.yview)
+        self.node_tree.configure(yscrollcommand=node_scroll.set)
+        self.node_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0), pady=(0, 4))
+        node_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 4), pady=(0, 4))
+        self.node_tree.configure(selectmode="browse")
 
     def _load_nodes(self):
         """Discovery-only by default; static SSH nodes are opt-in for this dashboard."""
