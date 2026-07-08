@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Operator-friendly dashboard entrypoint for the immersion bench.
 
-This module reuses the data acquisition, worker discovery, stress control,
-MCC-134 reading, CSV logging, and Excel export logic from ``dual_monitor.py``.
-It only changes the Tkinter dashboard layout so operators can understand what
-has been discovered, which nodes are online, and what to check when nodes are
-missing.
+This module reuses the acquisition and control logic from ``dual_monitor.py``
+but separates the UI into a full-size graph tab and a configuration/workers
+tab. Unlike ``dual_monitor.py``, this dashboard is discovery-only by default:
+it does not load ``/home/motul/nodes_ips`` unless ``--nodes-file`` is explicitly
+provided.
 """
 
 from __future__ import annotations
@@ -23,9 +23,11 @@ from tkinter import ttk
 
 import dual_monitor as core
 
+DEFAULT_READABLE_DISCOVERY_CIDR = "10.50.0.0/24"
+
 
 class ReadableMonitor(core.UnifiedMonitor):
-    """A clearer dashboard wrapped around ``dual_monitor.UnifiedMonitor``."""
+    """A clearer tabbed dashboard wrapped around ``dual_monitor.UnifiedMonitor``."""
 
     ONLINE_AFTER_SECONDS = 6
 
@@ -37,7 +39,7 @@ class ReadableMonitor(core.UnifiedMonitor):
         super().__init__(master, headless=headless)
 
     def _build_ui(self) -> None:
-        """Build a more readable operator dashboard."""
+        """Build a tabbed dashboard so the graph is not compressed by controls."""
         self.pack(fill=tk.BOTH, expand=True)
         style = ttk.Style(self.master)
         style.configure(".", font=core.BIG_FONT, padding=5)
@@ -47,7 +49,6 @@ class ReadableMonitor(core.UnifiedMonitor):
         style.configure("Node.Treeview", rowheight=30, font=("Helvetica", 12))
         style.configure("Node.Treeview.Heading", font=("Helvetica", 12, "bold"))
 
-        # ---------- header ----------
         header = ttk.Frame(self)
         header.pack(fill=tk.X, padx=8, pady=(8, 4))
         ttk.Label(header, text="Immersion Bench Monitor", style="Title.TLabel").pack(side=tk.LEFT)
@@ -63,9 +64,48 @@ class ReadableMonitor(core.UnifiedMonitor):
         self.full_btn = ttk.Button(header, text="Full Screen", command=self._toggle_full)
         self.full_btn.pack(side=tk.RIGHT, padx=4)
 
-        # ---------- controls ----------
-        controls = ttk.Frame(self)
-        controls.pack(fill=tk.X, padx=8, pady=4)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        self.graph_tab = ttk.Frame(self.notebook)
+        self.config_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.graph_tab, text="Graph")
+        self.notebook.add(self.config_tab, text="Configuration / Workers")
+
+        self._build_graph_tab()
+        self._build_config_tab()
+        self.node_refresh_id = self.after(1000, self._refresh_node_table)
+
+    def _build_graph_tab(self) -> None:
+        """Graph tab gets almost the full window."""
+        graph_header = ttk.Frame(self.graph_tab)
+        graph_header.pack(fill=tk.X, padx=6, pady=(6, 2))
+        ttk.Label(
+            graph_header,
+            text="Temperature history",
+            font=("Helvetica", 15, "bold"),
+        ).pack(side=tk.LEFT)
+        ttk.Label(
+            graph_header,
+            text="Workers and MCC-134 thermocouples. Controls and discovery are in the second tab.",
+            anchor="e",
+        ).pack(side=tk.RIGHT, fill=tk.X, expand=True)
+
+        self.fig, self.ax = core.plt.subplots(1, 1, figsize=core.FIGSIZE, dpi=core.PLOT_DPI)
+        self.fig.subplots_adjust(top=0.96, left=0.06, right=core.RIGHT_MARGIN, bottom=0.13)
+        self.canvas = core.FigureCanvasTkAgg(self.fig, master=self.graph_tab)
+        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+
+        zoom = ttk.Frame(self.graph_tab)
+        zoom.pack(fill=tk.X, padx=6, pady=(0, 6))
+        ttk.Label(zoom, text="Temperature scale").pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(zoom, text="Zoom in", command=lambda: self._zoom(-10)).pack(side=tk.LEFT, padx=2)
+        ttk.Button(zoom, text="Zoom out", command=lambda: self._zoom(10)).pack(side=tk.LEFT, padx=2)
+
+    def _build_config_tab(self) -> None:
+        """Configuration tab contains controls, discovery state, and worker details."""
+        controls = ttk.Frame(self.config_tab)
+        controls.pack(fill=tk.X, padx=6, pady=6)
 
         log_box = ttk.LabelFrame(controls, text="Logging", style="Section.TLabelframe")
         log_box.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
@@ -96,9 +136,8 @@ class ReadableMonitor(core.UnifiedMonitor):
         self.reboot_btn = ttk.Button(node_actions, text="Reboot Nodes", command=self._ask_reboot_nodes)
         self.reboot_btn.pack(side=tk.LEFT, padx=2)
 
-        # ---------- status and discovery ----------
-        status_row = ttk.Frame(self)
-        status_row.pack(fill=tk.X, padx=8, pady=4)
+        status_row = ttk.Frame(self.config_tab)
+        status_row.pack(fill=tk.X, padx=6, pady=(0, 6))
 
         cards = ttk.LabelFrame(status_row, text="Bench status", style="Section.TLabelframe")
         cards.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6))
@@ -115,9 +154,8 @@ class ReadableMonitor(core.UnifiedMonitor):
         for lb in self.log_labels:
             lb.pack(fill=tk.X)
 
-        # ---------- node table ----------
-        nodes_box = ttk.LabelFrame(self, text="Discovered workers", style="Section.TLabelframe")
-        nodes_box.pack(fill=tk.X, padx=8, pady=4)
+        nodes_box = ttk.LabelFrame(self.config_tab, text="Discovered workers", style="Section.TLabelframe")
+        nodes_box.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
         self.node_help_lbl = ttk.Label(
             nodes_box,
             text="If a worker is missing: check power, Ethernet, same subnet, and that bench-worker-agent.service is running.",
@@ -130,7 +168,7 @@ class ReadableMonitor(core.UnifiedMonitor):
             nodes_box,
             columns=columns,
             show="headings",
-            height=5,
+            height=12,
             style="Node.Treeview",
         )
         headings = {
@@ -145,8 +183,8 @@ class ReadableMonitor(core.UnifiedMonitor):
         }
         widths = {
             "state": 90,
-            "node": 190,
-            "ip": 130,
+            "node": 220,
+            "ip": 140,
             "source": 90,
             "temp": 90,
             "clock": 100,
@@ -159,22 +197,14 @@ class ReadableMonitor(core.UnifiedMonitor):
         self.node_tree.tag_configure("online", background="#dff4df")
         self.node_tree.tag_configure("offline", background="#f5d8d8")
         self.node_tree.tag_configure("waiting", background="#fff1c4")
-        self.node_tree.pack(fill=tk.X, padx=4, pady=(0, 4))
+        self.node_tree.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
 
-        # ---------- plot ----------
-        self.fig, self.ax = core.plt.subplots(1, 1, figsize=core.FIGSIZE, dpi=core.PLOT_DPI)
-        self.fig.subplots_adjust(top=0.94, left=0.06, right=core.RIGHT_MARGIN, bottom=0.145)
-        self.canvas = core.FigureCanvasTkAgg(self.fig, master=self)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
-
-        # ---------- zoom ----------
-        zoom = ttk.Frame(self)
-        zoom.pack(fill=tk.X, padx=8, pady=(0, 6))
-        ttk.Label(zoom, text="Temperature scale").pack(side=tk.LEFT, padx=(0, 4))
-        ttk.Button(zoom, text="Zoom in", command=lambda: self._zoom(-10)).pack(side=tk.LEFT, padx=2)
-        ttk.Button(zoom, text="Zoom out", command=lambda: self._zoom(10)).pack(side=tk.LEFT, padx=2)
-
-        self.node_refresh_id = self.after(1000, self._refresh_node_table)
+    def _load_nodes(self):
+        """Discovery-only by default; static SSH nodes are opt-in for this dashboard."""
+        if not getattr(core, "NODES_FILE", ""):
+            logging.info("No SSH fallback nodes file configured; using worker-agent discovery only")
+            return []
+        return super()._load_nodes()
 
     def _show_connection_status(self) -> None:
         """Show clear high-level status without blocking the UI on SSH probes."""
@@ -192,7 +222,7 @@ class ReadableMonitor(core.UnifiedMonitor):
             if core.DISCOVERY_CIDR:
                 text = f"Workers: scanning {core.DISCOVERY_CIDR}"
             else:
-                text = "Workers: no discovery CIDR"
+                text = "Workers: discovery disabled"
             self.node_banner.configure(text=text, background="orange", foreground="black")
             return
 
@@ -359,7 +389,7 @@ class ReadableMonitor(core.UnifiedMonitor):
                 )
             else:
                 self.node_help_lbl.configure(
-                    text="No workers configured. Start with --discovery-cidr 10.50.0.0/24 or provide /home/motul/nodes_ips."
+                    text="No workers configured. Start with --discovery-cidr 10.50.0.0/24. Static SSH nodes are disabled unless --nodes-file is explicitly provided."
                 )
         else:
             online = self._online_node_count()
@@ -388,13 +418,17 @@ class ReadableMonitor(core.UnifiedMonitor):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Readable immersion bench dashboard")
-    parser.add_argument("--nodes-file", default=core.DEFAULT_NODES_FILE, help="File with SSH fallback node IPs")
+    parser.add_argument(
+        "--nodes-file",
+        default="",
+        help="Optional SSH fallback node file. Disabled by default in this dashboard.",
+    )
     parser.add_argument("--csv-dir", default=core.DEFAULT_CSV_DIR, help="Directory for CSV output")
     parser.add_argument("--headless", action="store_true", help="Run without showing the GUI")
     parser.add_argument("--agent-port", type=int, default=core.DEFAULT_AGENT_PORT, help="HTTP worker-agent port")
     parser.add_argument(
         "--discovery-cidr",
-        default=core.DEFAULT_DISCOVERY_CIDR,
+        default=DEFAULT_READABLE_DISCOVERY_CIDR,
         help="CIDR range to scan for worker agents, e.g. 10.50.0.0/24",
     )
     args = parser.parse_args()
