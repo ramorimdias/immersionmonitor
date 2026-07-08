@@ -67,13 +67,13 @@ immersionmonitor-wifi.env       optional Wi-Fi config at the root of the boot pa
 cmdline.txt                     modified by adding a first-boot systemd.run hook
 ```
 
-Example if Windows mounts the SD card as `E:`:
+Example if Windows mounts the SD card as `D:`:
 
 ```text
-E:\worker_firstboot.sh
-E:\ssh
-E:\immersionmonitor-wifi.env
-E:\cmdline.txt   modified, not replaced
+D:\worker_firstboot.sh
+D:\ssh
+D:\immersionmonitor-wifi.env
+D:\cmdline.txt   modified, not replaced
 ```
 
 Do not put these files inside a folder. They must be at the root of the visible Raspberry Pi boot drive.
@@ -83,19 +83,19 @@ Do not put these files inside a folder. They must be at the root of the visible 
 1. Flash **Raspberry Pi OS Lite 64-bit** with Raspberry Pi Imager.
 2. Eject and reinsert the SD card if Windows does not show the boot drive.
 3. Open PowerShell.
-4. Replace `E:` below with the SD card boot drive letter visible in File Explorer.
+4. Replace `D:` below if the SD card uses another boot drive letter.
 5. Run:
 
 ```powershell
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/prepare_worker_bootfs.ps1" -OutFile "$env:TEMP\prepare_worker_bootfs.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive E: -WifiSsid "Motul-Guest" -WifiPassword "Welcome-2-Motul!" -WifiCountry FR
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive D: -WifiSsid "Motul-Guest" -WifiPassword "Welcome-2-Motul!" -WifiCountry FR
 ```
 
 ## Test from Windows before this PR is merged
 
 ```powershell
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ramorimdias/immersionmonitor/worker-firstboot-provisioning/scripts/prepare_worker_bootfs.ps1" -OutFile "$env:TEMP\prepare_worker_bootfs.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive E: -Branch worker-firstboot-provisioning -WifiSsid "Motul-Guest" -WifiPassword "Welcome-2-Motul!" -WifiCountry FR
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive D: -Branch worker-firstboot-provisioning -WifiSsid "Motul-Guest" -WifiPassword "Welcome-2-Motul!" -WifiCountry FR
 ```
 
 ## Prepare the SD card from Windows without Wi-Fi
@@ -104,7 +104,7 @@ Use this only if the worker first boot will use Ethernet with internet access:
 
 ```powershell
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/prepare_worker_bootfs.ps1" -OutFile "$env:TEMP\prepare_worker_bootfs.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive E:
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive D:
 ```
 
 ## Prepare the SD card from Linux
@@ -168,17 +168,26 @@ If provisioning fails, the second-stage provisioning service is left enabled so 
 
 Move the worker Pi to the bench switch.
 
-On the head Pi, run:
+On the head Pi, run the auto launcher:
 
 ```bash
 cd /opt/immersionmonitor
-python3 readable_monitor.py
+bash scripts/run_readable_monitor_auto.sh
 ```
 
-The readable dashboard scans the default bench subnet:
+The auto launcher selects the discovery subnet from the head Pi IP:
 
 ```text
-10.50.0.0/24
+Head IP 192.168.50.x  -> scans 192.168.50.0/24
+Head IP 10.50.0.x     -> scans 10.50.0.0/24
+Other private IP      -> scans that /24 subnet
+```
+
+You can still override it manually:
+
+```bash
+DISCOVERY_CIDR=192.168.50.0/24 bash scripts/run_readable_monitor_auto.sh
+DISCOVERY_CIDR=10.50.0.0/24 bash scripts/run_readable_monitor_auto.sh
 ```
 
 ## Important limitation
