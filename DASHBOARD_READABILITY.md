@@ -30,7 +30,24 @@ Worker table shows state, hostname, IP, source, temperature, clock, CPU, and las
 Operator help text explains what to check when workers are missing
 ```
 
-## Run it
+## Recommended run command
+
+Use the auto launcher so the head Pi scans the correct subnet whether it is on `192.168.50.x` or `10.50.0.x`:
+
+```bash
+cd /opt/immersionmonitor
+bash scripts/run_readable_monitor_auto.sh
+```
+
+The auto launcher selects:
+
+```text
+Head IP 192.168.50.x  -> scans 192.168.50.0/24
+Head IP 10.50.0.x     -> scans 10.50.0.0/24
+Other private IP      -> scans that /24 subnet
+```
+
+## Manual run commands
 
 Default discovery-only mode:
 
@@ -48,7 +65,15 @@ This scans the default bench subnet:
 Use another subnet if needed:
 
 ```bash
-python3 readable_monitor.py --discovery-cidr 10.50.1.0/24 --agent-port 8765
+python3 readable_monitor.py --discovery-cidr 192.168.50.0/24 --agent-port 8765
+python3 readable_monitor.py --discovery-cidr 10.50.0.0/24 --agent-port 8765
+```
+
+You can also force the auto launcher:
+
+```bash
+DISCOVERY_CIDR=192.168.50.0/24 bash scripts/run_readable_monitor_auto.sh
+DISCOVERY_CIDR=10.50.0.0/24 bash scripts/run_readable_monitor_auto.sh
 ```
 
 The old dashboard still works and keeps its previous behavior:
@@ -87,8 +112,10 @@ curl http://127.0.0.1:8765/status
 hostname -I
 ```
 
-Useful head Pi command:
+Useful head Pi commands:
 
 ```bash
+bash scripts/run_readable_monitor_auto.sh
+python3 readable_monitor.py --discovery-cidr 192.168.50.0/24 --agent-port 8765
 python3 readable_monitor.py --discovery-cidr 10.50.0.0/24 --agent-port 8765
 ```
