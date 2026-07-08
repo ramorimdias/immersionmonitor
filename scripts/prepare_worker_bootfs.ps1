@@ -21,6 +21,8 @@ $CmdlinePath = Join-Path $BootRoot "cmdline.txt"
 $FirstBootPath = Join-Path $BootRoot "worker_firstboot.sh"
 $SshPath = Join-Path $BootRoot "ssh"
 $WifiEnvPath = Join-Path $BootRoot "immersionmonitor-wifi.env"
+$FirstrunPath = Join-Path $BootRoot "firstrun.sh"
+$ImagerFirstrunPath = Join-Path $BootRoot "firstrun-imager.sh"
 
 if (-not (Test-Path $CmdlinePath)) {
     throw "cmdline.txt not found on $BootRoot. Select the Raspberry Pi OS bootfs drive, not the Windows recovery prompt."
@@ -29,7 +31,7 @@ if (-not (Test-Path $CmdlinePath)) {
 $RawBase = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/$Branch"
 $FirstBootUrl = "$RawBase/scripts/worker_firstboot.sh"
 
-Write-Host "Downloading first-boot script..."
+Write-Host "Downloading worker provisioning script..."
 Invoke-WebRequest -Uri $FirstBootUrl -OutFile $FirstBootPath -UseBasicParsing
 
 if ($WifiSsid -ne "") {
@@ -47,16 +49,37 @@ WIFI_COUNTRY=$WifiCountry
     Set-Content -Path $WifiEnvPath -Value $WifiEnv -Encoding ascii
 }
 
-Write-Host "Adding first-boot hook to cmdline.txt..."
 $Cmdline = Get-Content -Raw -Path $CmdlinePath
 $Cmdline = $Cmdline -replace "`r", "" -replace "`n", ""
-$Hook = "systemd.run=/boot/firmware/worker_firstboot.sh systemd.run_success_action=reboot systemd.unit=kernel-command-line.target"
+$WorkerHook = "systemd.run=/boot/firmware/worker_firstboot.sh systemd.run_success_action=reboot systemd.unit=kernel-command-line.target"
+$HasSystemdRun = $Cmdline -match "systemd\.run="
+$HasWorkerHook = $Cmdline -match "systemd\.run=/boot/firmware/worker_firstboot\.sh"
 
-if ($Cmdline -notmatch "systemd\.run=/boot/firmware/worker_firstboot\.sh") {
-    $Cmdline = ($Cmdline.Trim() + " " + $Hook).Trim()
+if ($HasSystemdRun -and -not $HasWorkerHook -and (Test-Path $FirstrunPath)) {
+    Write-Host "Raspberry Pi Imager first-run script detected. Wrapping it instead of adding a second systemd.run hook..."
+    if (-not (Test-Path $ImagerFirstrunPath)) {
+        Move-Item -Path $FirstrunPath -Destination $ImagerFirstrunPath
+    }
+    $Wrapper = @'
+#!/usr/bin/env bash
+set -e
+LOG=/boot/firmware/immersionmonitor-firstboot.log
+exec >> "$LOG" 2>&1
+printf '\n===== combined Raspberry Pi Imager + immersionmonitor first run: %s =====\n' "$(date --iso-8601=seconds)"
+if [ -x /boot/firmware/firstrun-imager.sh ]; then
+  /boot/firmware/firstrun-imager.sh
+elif [ -f /boot/firmware/firstrun-imager.sh ]; then
+  bash /boot/firmware/firstrun-imager.sh
+fi
+bash /boot/firmware/worker_firstboot.sh
+'@
+    Set-Content -Path $FirstrunPath -Value $Wrapper -Encoding ascii
+} elseif (-not $HasWorkerHook) {
+    Write-Host "Adding worker first-boot hook to cmdline.txt..."
+    $Cmdline = ($Cmdline.Trim() + " " + $WorkerHook).Trim()
     Set-Content -Path $CmdlinePath -Value $Cmdline -NoNewline -Encoding ascii
 } else {
-    Write-Host "First-boot hook already present."
+    Write-Host "Worker first-boot hook already present."
 }
 
 if (-not (Test-Path $SshPath)) {
