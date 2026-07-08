@@ -1,0 +1,15 @@
+[Unit]
+Description=Bench worker HTTP agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/immersionmonitor/worker_agent.py --host 0.0.0.0 --port 8765
+Restart=always
+RestartSec=3
+User=pi
+WorkingDirectory=/opt/immersionmonitor
+
+[Install]
+WantedBy=multi-user.target
