@@ -30,8 +30,6 @@ class ReadableMonitor(core.UnifiedMonitor):
 
     ONLINE_AFTER_SECONDS = 6
     TOUCH_FONT = ("Helvetica", 12)
-    TOUCH_TITLE_FONT = ("Helvetica", 23, "bold")
-    TOUCH_LABEL_FONT = ("Helvetica", 12, "bold")
     TOUCH_BUTTON_PAD = (14, 10)
     TOUCH_ROWHEIGHT = 40
 
@@ -40,32 +38,7 @@ class ReadableMonitor(core.UnifiedMonitor):
         self.last_metrics: dict[str, dict] = {}
         self.discovery_text = "Discovery not started"
         self.node_refresh_id = None
-        self.summary_vars: dict[str, tk.StringVar] = {}
         super().__init__(master, headless=headless)
-
-    def _set_summary(self, key: str, text: str) -> None:
-        var = self.summary_vars.get(key)
-        if var is not None:
-            var.set(text)
-
-    @staticmethod
-    def _card(parent: tk.Widget, title: str, value_var: tk.StringVar, accent: str = "") -> ttk.Frame:
-        card = ttk.Frame(parent, style="Card.TFrame", padding=(12, 10))
-        if accent:
-            tk.Frame(card, width=4, bg=accent, highlightthickness=0).pack(
-                side=tk.LEFT, fill=tk.Y, padx=(0, 10)
-            )
-        body = ttk.Frame(card, style="Card.TFrame")
-        body.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        ttk.Label(body, text=title, style="CardTitle.TLabel").pack(anchor="w")
-        ttk.Label(
-            body,
-            textvariable=value_var,
-            style="CardValue.TLabel",
-            wraplength=280,
-            justify="left",
-        ).pack(anchor="w", pady=(4, 0))
-        return card
 
     def _add_spinner(self, frame, label, default, attr):
         """Build touch-friendly step controls with larger targets."""
@@ -93,10 +66,6 @@ class ReadableMonitor(core.UnifiedMonitor):
             pass
         style.configure(".", font=self.TOUCH_FONT, padding=6)
         style.configure("Page.TFrame", background="#f5f7fb")
-        style.configure("Hero.TFrame", background="#0f172a")
-        style.configure("HeroTitle.TLabel", background="#0f172a", foreground="#f8fafc", font=self.TOUCH_TITLE_FONT)
-        style.configure("HeroSub.TLabel", background="#0f172a", foreground="#cbd5e1", font=self.TOUCH_FONT)
-        style.configure("HeroChip.TLabel", background="#1e293b", foreground="#e2e8f0", font=("Helvetica", 11, "bold"), padding=(14, 8))
         style.configure("Card.TFrame", background="#ffffff")
         style.configure("CardTitle.TLabel", background="#ffffff", foreground="#64748b", font=("Helvetica", 11, "bold"))
         style.configure("CardValue.TLabel", background="#ffffff", foreground="#0f172a", font=("Helvetica", 14, "bold"))
@@ -113,6 +82,7 @@ class ReadableMonitor(core.UnifiedMonitor):
         style.configure("Node.Treeview", rowheight=self.TOUCH_ROWHEIGHT, font=("Helvetica", 12))
         style.configure("Node.Treeview.Heading", font=("Helvetica", 12, "bold"))
         style.configure("Action.TButton", font=("Helvetica", 11, "bold"), padding=self.TOUCH_BUTTON_PAD)
+        style.configure("TNotebook.Tab", font=("Helvetica", 12), padding=(16, 8))
         self.master.configure(background="#f5f7fb")
         self.configure(style="Page.TFrame")
 
@@ -141,71 +111,14 @@ class ReadableMonitor(core.UnifiedMonitor):
         self.notebook.add(self.graph_tab, text="Graph")
         self.notebook.add(self.config_tab, text="Configuration / Workers")
 
-        self.summary_vars = {
-            "hat": tk.StringVar(master=self.master, value="Checking hardware"),
-            "workers": tk.StringVar(master=self.master, value="Scanning workers"),
-            "discovery": tk.StringVar(master=self.master, value=self.discovery_text),
-            "activity": tk.StringVar(master=self.master, value="Idle"),
-        }
         self._build_graph_tab()
         self._build_config_tab()
         self.node_refresh_id = self.after(2000, self._refresh_node_table)
 
     def _build_graph_tab(self) -> None:
         """Graph tab gets almost the full window."""
-        hero = tk.Frame(self.graph_tab, bg="#0f172a", highlightthickness=0)
-        hero.pack(fill=tk.X, padx=8, pady=(8, 6))
-        hero_left = tk.Frame(hero, bg="#0f172a", highlightthickness=0)
-        hero_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=18, pady=16)
-        tk.Label(
-            hero_left,
-            text="Immersion Bench Monitor",
-            bg="#0f172a",
-            fg="#f8fafc",
-            font=self.TOUCH_TITLE_FONT,
-        ).pack(anchor="w")
-        tk.Label(
-            hero_left,
-            text="A polished live view for discovery, stress runs, and temperature history.",
-            bg="#0f172a",
-            fg="#cbd5e1",
-            font=self.TOUCH_FONT,
-        ).pack(anchor="w", pady=(6, 0))
-        chip_row = tk.Frame(hero_left, bg="#0f172a")
-        chip_row.pack(anchor="w", pady=(12, 0))
-        for label, key in (
-            ("Hardware", "hat"),
-            ("Workers", "workers"),
-            ("Discovery", "discovery"),
-            ("Activity", "activity"),
-        ):
-            chip = tk.Label(
-                chip_row,
-                textvariable=self.summary_vars[key],
-                bg="#1e293b",
-                fg="#e2e8f0",
-                font=("Helvetica", 11, "bold"),
-                padx=14,
-                pady=7,
-                relief="flat",
-            )
-            chip.pack(side=tk.LEFT, padx=(0, 8))
-
-        hero_right = tk.Frame(hero, bg="#0f172a", highlightthickness=0)
-        hero_right.pack(side=tk.RIGHT, padx=18, pady=16)
-        ttk.Label(
-            hero_right,
-            text="Quick actions",
-            style="HeroChip.TLabel",
-        ).pack(anchor="e")
-        ttk.Label(
-            hero_right,
-            text="Keep the plot clean, keep the controls close.",
-            style="HeroSub.TLabel",
-        ).pack(anchor="e", pady=(8, 0))
-
         quick = ttk.Frame(self.graph_tab, style="Page.TFrame")
-        quick.pack(fill=tk.X, padx=8, pady=(0, 6))
+        quick.pack(fill=tk.X, padx=8, pady=(8, 6))
         ttk.Button(quick, text="Start Log", style="Action.TButton", command=self._start_log).pack(
             side=tk.LEFT, padx=(0, 6)
         )
@@ -215,36 +128,15 @@ class ReadableMonitor(core.UnifiedMonitor):
         self.start_btn = ttk.Button(quick, text="Start Stress", style="Action.TButton", command=self._start_sequence)
         self.start_btn.pack(side=tk.LEFT, padx=(0, 6))
         self.stop_btn = ttk.Button(quick, text="Stop", state=tk.DISABLED, style="Action.TButton", command=self._ask_stop_stress)
-        self.stop_btn.pack(side=tk.LEFT)
-        tk.Label(
-            quick,
-            text="Advanced timing, discovery, and worker management live on the second tab.",
-            bg="#f5f7fb",
-            fg="#64748b",
-            font=self.TOUCH_FONT,
-        ).pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=12)
-
-        cards = ttk.Frame(self.graph_tab, style="Page.TFrame")
-        cards.pack(fill=tk.X, padx=8, pady=(0, 6))
-        self.graph_card_1 = self._card(cards, "MCC-134", self.summary_vars["hat"], "#06b6d4")
-        self.graph_card_2 = self._card(cards, "Workers", self.summary_vars["workers"], "#22c55e")
-        self.graph_card_3 = self._card(cards, "Discovery", self.summary_vars["discovery"], "#f59e0b")
-        self.graph_card_4 = self._card(cards, "Run state", self.summary_vars["activity"], "#8b5cf6")
-        for card in (self.graph_card_1, self.graph_card_2, self.graph_card_3, self.graph_card_4):
-            card.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6), ipadx=2, ipady=2)
-        self.graph_card_4.pack_configure(padx=0)
+        self.stop_btn.pack(side=tk.LEFT, padx=(0, 14))
+        ttk.Button(quick, text="Zoom in", style="Action.TButton", command=lambda: self._zoom(-10)).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(quick, text="Zoom out", style="Action.TButton", command=lambda: self._zoom(10)).pack(side=tk.LEFT)
 
         self.fig, self.ax = core.plt.subplots(1, 1, figsize=core.FIGSIZE, dpi=core.PLOT_DPI)
         self.fig.patch.set_facecolor("#ffffff")
         self.fig.subplots_adjust(top=0.96, left=0.06, right=core.RIGHT_MARGIN, bottom=0.13)
         self.canvas = core.FigureCanvasTkAgg(self.fig, master=self.graph_tab)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
-
-        zoom = ttk.Frame(self.graph_tab)
-        zoom.pack(fill=tk.X, padx=6, pady=(0, 6))
-        ttk.Label(zoom, text="Temperature scale", font=self.TOUCH_FONT).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(zoom, text="Zoom in", style="Action.TButton", command=lambda: self._zoom(-10)).pack(side=tk.LEFT, padx=4)
-        ttk.Button(zoom, text="Zoom out", style="Action.TButton", command=lambda: self._zoom(10)).pack(side=tk.LEFT, padx=4)
 
     def _build_config_tab(self) -> None:
         """Configuration tab contains controls, discovery state, and worker details."""
@@ -267,7 +159,15 @@ class ReadableMonitor(core.UnifiedMonitor):
         ttk.Button(maintenance, text="Save XLSX", style="Action.TButton", command=self._ask_write_excel).pack(
             fill=tk.X, pady=(0, 6)
         )
-        ttk.Button(maintenance, text="Clear ALL", style="Action.TButton", command=self._clear_all).pack(fill=tk.X)
+        ttk.Button(maintenance, text="Clear ALL", style="Action.TButton", command=self._clear_all).pack(fill=tk.X, pady=(0, 6))
+        self.skip_btn = ttk.Button(
+            maintenance,
+            text="Skip Cooling",
+            state=tk.DISABLED,
+            style="Action.TButton",
+            command=self._ask_skip_cooling,
+        )
+        self.skip_btn.pack(fill=tk.X)
 
         sequence_box = ttk.LabelFrame(sidebar, text="Sequence settings", style="Section.TLabelframe")
         sequence_box.pack(fill=tk.X, pady=(0, 8))
@@ -366,22 +266,17 @@ class ReadableMonitor(core.UnifiedMonitor):
 
         if core.hat_list(core.HatIDs.MCC_134):
             self.hat_banner.configure(text="MCC-134 HAT: OK", background="green", foreground="white")
-            self._set_summary("hat", "MCC-134: ready")
         else:
             self.hat_banner.configure(text="MCC-134 HAT: not found", background="red", foreground="white")
-            self._set_summary("hat", "MCC-134: not found")
 
         nodes = sorted(set(getattr(self, "node_ips", [])))
         online = self._online_node_count()
         if not nodes:
             if core.DISCOVERY_CIDR:
                 text = f"Workers: scanning {core.DISCOVERY_CIDR}"
-                self._set_summary("discovery", f"Scanning {core.DISCOVERY_CIDR} on port {core.AGENT_PORT}")
             else:
                 text = "Workers: discovery disabled"
-                self._set_summary("discovery", "Discovery disabled")
             self.node_banner.configure(text=text, background="orange", foreground="black")
-            self._set_summary("workers", "No workers yet")
             return
 
         if online == len(nodes):
@@ -403,12 +298,6 @@ class ReadableMonitor(core.UnifiedMonitor):
                 foreground="black",
             )
 
-        self._set_summary("workers", f"{online}/{len(nodes)} online")
-        if core.DISCOVERY_CIDR:
-            self._set_summary("discovery", f"Scanning {core.DISCOVERY_CIDR} on port {core.AGENT_PORT}")
-        else:
-            self._set_summary("discovery", "Discovery disabled")
-
     def _online_node_count(self) -> int:
         now = datetime.now()
         with self.metrics_lock:
@@ -421,7 +310,6 @@ class ReadableMonitor(core.UnifiedMonitor):
 
     def _set_discovery_text(self, text: str) -> None:
         self.discovery_text = text
-        self._set_summary("discovery", f"Discovery: {text}")
         if self.headless or not hasattr(self, "discovery_lbl"):
             return
         self.discovery_lbl.configure(text=f"Discovery: {text}")
@@ -572,11 +460,6 @@ class ReadableMonitor(core.UnifiedMonitor):
                 self.ax.set_title("Temperature history")
             except Exception:
                 pass
-
-    def _tick(self) -> None:
-        super()._tick()
-        if hasattr(self, "status_lbl"):
-            self._set_summary("activity", self.status_lbl.cget("text"))
 
     def close(self) -> None:
         if hasattr(self, "node_refresh_id") and self.node_refresh_id:

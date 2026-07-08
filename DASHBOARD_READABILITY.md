@@ -21,12 +21,12 @@ It changes the screen layout so the graph remains readable and the user can unde
 ```text
 Graph and configuration are separated into two tabs
 The Graph tab gives the plot almost the full window
-The Graph tab uses a dark hero header, live summary chips, and a compact quick-actions bar
+The Graph tab uses a compact touch toolbar and keeps repeated status details off the chart view
 The UI is tuned for touch screens with larger buttons, bigger text, and wider hit targets
 The Configuration / Workers tab keeps discovery, sequence settings, maintenance actions, and the worker table
 The new dashboard defaults to worker-agent discovery only
 It does not read /home/motul/nodes_ips unless --nodes-file is explicitly provided
-Bench status cards and live summary chips show MCC-134, worker count, discovery, and run state
+Bench status cards show MCC-134, worker count, discovery, and run state on the Configuration / Workers tab
 Discovery status shows CIDR, port, scan result, and last scan time
 Worker table shows state, hostname, IP, source, temperature, clock, CPU, and last seen
 Operator help text explains what to check when workers are missing
