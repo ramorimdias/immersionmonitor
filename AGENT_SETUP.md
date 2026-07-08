@@ -13,9 +13,40 @@ Worker agent port: 8765
 Discovery CIDR: 10.50.0.0/24
 ```
 
-## Worker Pi image
+## Fresh worker Pi workflow
 
-Install the runtime tools:
+Install **Raspberry Pi OS Lite 64-bit**, boot the worker, give it temporary internet access, then run this one-command installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/install_worker.sh | bash
+```
+
+Until this PR is merged, test the installer from this branch with:
+
+```bash
+IMMERSIONMONITOR_BRANCH=codex/worker-agent-discovery \
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/ramorimdias/immersionmonitor/codex/worker-agent-discovery/scripts/install_worker.sh)"
+```
+
+The installer performs these steps automatically:
+
+```text
+apt update
+install python3, stress-ng, curl, ca-certificates
+copy worker_agent.py to /opt/immersionmonitor
+install bench-worker-agent.service
+start and enable the service at boot
+```
+
+After installation, connect the worker Pi to the bench switch. The head Pi should discover it if the dashboard is started with the correct discovery CIDR.
+
+Check from the worker itself:
+
+```bash
+curl http://127.0.0.1:8765/status
+```
+
+## Manual worker installation
 
 ```bash
 sudo apt update
@@ -25,12 +56,6 @@ sudo cp worker_agent.py /opt/immersionmonitor/worker_agent.py
 sudo cp systemd/bench-worker-agent.service /etc/systemd/system/bench-worker-agent.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now bench-worker-agent.service
-```
-
-Check from the worker itself:
-
-```bash
-curl http://127.0.0.1:8765/status
 ```
 
 ## Head Pi usage
