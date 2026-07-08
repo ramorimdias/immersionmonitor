@@ -40,6 +40,13 @@ stress_proc: subprocess.Popen | None = None
 last_cpu_sample: tuple[float, int, int] | None = None
 
 
+def privileged_cmd(command: list[str]) -> list[str]:
+    """Use sudo only when the agent is not already running as root."""
+    if os.geteuid() == 0:
+        return command
+    return ["sudo", "-n", *command]
+
+
 def read_text(path: str) -> str | None:
     try:
         return Path(path).read_text().strip()
@@ -118,13 +125,23 @@ def stress_running() -> bool:
 
 
 def set_performance_governor() -> None:
-    command = (
-        "for g in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do "
-        "echo performance | sudo -n tee \"$g\" >/dev/null; done; "
-        "[ -e /sys/devices/system/cpu/cpufreq/boost ] && "
-        "echo 1 | sudo -n tee /sys/devices/system/cpu/cpufreq/boost >/dev/null || true"
-    )
-    subprocess.run(command, shell=True, check=False)
+    for path in Path("/sys/devices/system/cpu").glob("cpu*/cpufreq/scaling_governor"):
+        subprocess.run(
+            privileged_cmd(["tee", str(path)]),
+            input=b"performance\n",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    boost = Path("/sys/devices/system/cpu/cpufreq/boost")
+    if boost.exists():
+        subprocess.run(
+            privileged_cmd(["tee", str(boost)]),
+            input=b"1\n",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
 
 
 def start_stress(seconds: int | None = None) -> None:
@@ -196,7 +213,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"ok": True, "stress_running": False})
         elif self.path == "/reboot":
             self._send_json({"ok": True, "rebooting": True})
-            subprocess.Popen(["sudo", "reboot"])
+            subprocess.Popen(privileged_cmd(["reboot"]))
         else:
             self._send_json({"error": "not found"}, 404)
 
