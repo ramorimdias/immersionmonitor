@@ -8,7 +8,7 @@ Goal:
 Flash Raspberry Pi OS Lite
 Prepare the SD card boot partition once
 Insert SD card into worker Pi
-Connect Ethernet and power
+Connect Ethernet or Wi-Fi
 Worker installs itself on first boot
 Move worker to the bench switch
 Head Pi discovers it automatically
@@ -16,12 +16,13 @@ Head Pi discovers it automatically
 
 ## Requirements
 
-During first boot, the worker must have:
+During first installation, the worker must have:
 
 ```text
-Ethernet connection
 Internet access
 DHCP
+DNS
+Access to raw.githubusercontent.com and apt repositories
 ```
 
 Internet is needed only for first installation because the worker downloads packages and the latest repository files. After installation, the worker can run on the isolated bench network.
@@ -34,7 +35,7 @@ When flashing the SD card, open Raspberry Pi Imager advanced settings and set at
 Hostname: bench-worker
 Username and password: set them explicitly
 SSH: enabled
-Wi-Fi: optional, Ethernet is preferred
+Wi-Fi: optional here, because this repo also provides a bootfs Wi-Fi setup path
 ```
 
 Modern Raspberry Pi OS images do not have the old default `pi` user unless you configure a user. Set the user in Raspberry Pi Imager even if you do not plan to use keyboard/screen.
@@ -60,9 +61,10 @@ kernel8.img
 That partition is the place where the preparation script writes:
 
 ```text
-worker_firstboot.sh      at the root of the boot partition
-ssh                      empty marker file at the root of the boot partition
-cmdline.txt              modified by adding a first-boot systemd.run hook
+worker_firstboot.sh             at the root of the boot partition
+ssh                             empty marker file at the root of the boot partition
+immersionmonitor-wifi.env       optional Wi-Fi config at the root of the boot partition
+cmdline.txt                     modified by adding a first-boot systemd.run hook
 ```
 
 Example if Windows mounts the SD card as `E:`:
@@ -70,12 +72,13 @@ Example if Windows mounts the SD card as `E:`:
 ```text
 E:\worker_firstboot.sh
 E:\ssh
+E:\immersionmonitor-wifi.env
 E:\cmdline.txt   modified, not replaced
 ```
 
 Do not put these files inside a folder. They must be at the root of the visible Raspberry Pi boot drive.
 
-## Prepare the SD card from Windows
+## Prepare the SD card from Windows with Wi-Fi
 
 1. Flash **Raspberry Pi OS Lite 64-bit** with Raspberry Pi Imager.
 2. Eject and reinsert the SD card if Windows does not show the boot drive.
@@ -85,14 +88,23 @@ Do not put these files inside a folder. They must be at the root of the visible 
 
 ```powershell
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/prepare_worker_bootfs.ps1" -OutFile "$env:TEMP\prepare_worker_bootfs.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive E:
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive E: -WifiSsid "Motul-Guest" -WifiPassword "Welcome-2-Motul!" -WifiCountry FR
 ```
 
 ## Test from Windows before this PR is merged
 
 ```powershell
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ramorimdias/immersionmonitor/worker-firstboot-provisioning/scripts/prepare_worker_bootfs.ps1" -OutFile "$env:TEMP\prepare_worker_bootfs.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive E: -Branch worker-firstboot-provisioning
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive E: -Branch worker-firstboot-provisioning -WifiSsid "Motul-Guest" -WifiPassword "Welcome-2-Motul!" -WifiCountry FR
+```
+
+## Prepare the SD card from Windows without Wi-Fi
+
+Use this only if the worker first boot will use Ethernet with internet access:
+
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/prepare_worker_bootfs.ps1" -OutFile "$env:TEMP\prepare_worker_bootfs.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\prepare_worker_bootfs.ps1" -BootDrive E:
 ```
 
 ## Prepare the SD card from Linux
@@ -119,6 +131,7 @@ IMMERSIONMONITOR_BRANCH=worker-firstboot-provisioning bash /tmp/prepare_worker_b
 
 ```text
 Copies worker_firstboot.sh to the FAT boot partition
+Optionally writes immersionmonitor-wifi.env to the FAT boot partition
 Adds a systemd.run first-boot hook to cmdline.txt
 Enables SSH by creating the bootfs ssh marker file
 ```
@@ -128,12 +141,17 @@ Enables SSH by creating the bootfs ssh marker file
 The worker Pi:
 
 ```text
-waits for network
+creates a Wi-Fi connection if immersionmonitor-wifi.env exists
+installs a second-stage provisioning service
+removes the early first-boot hook from cmdline.txt
+reboots into normal boot
+waits for network-online.target
+checks DNS and GitHub access
 runs apt update
 installs python3, stress-ng, curl, ca-certificates
 copies worker_agent.py to /opt/immersionmonitor
 installs bench-worker-agent.service
-removes the first-boot hook from cmdline.txt
+disables the provisioning service
 reboots
 starts the worker agent automatically after reboot
 ```
@@ -144,7 +162,7 @@ Log file on the SD boot partition:
 /boot/firmware/immersionmonitor-firstboot.log
 ```
 
-If provisioning fails, the first-boot hook is left in place so the worker retries on the next boot.
+If provisioning fails, the second-stage provisioning service is left enabled so the worker retries on the next boot.
 
 ## After installation
 
