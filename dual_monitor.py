@@ -2,14 +2,16 @@
 """Cluster monitoring dashboard.
 
 This script collects SoC and fluid temperatures from a cluster of
-Raspberry Pis using SSH and an optional MCC-134 board. It can display a
-Tkinter GUI or run headless and periodically save data to CSV files and
-Excel workbooks.
+Raspberry Pis using worker agents, SSH fallback, and an optional MCC-134
+board. It can display a Tkinter GUI or run headless and periodically save
+data to CSV files and Excel workbooks.
 """
 
 # ───────── DEFAULT SETTINGS ─────────
-DEFAULT_NODES_FILE = "/home/motul/nodes_ips"  # ip [slots=N]
+DEFAULT_NODES_FILE = "/home/motul/nodes_ips"  # optional SSH fallback: ip [slots=N]
 DEFAULT_CSV_DIR    = "/home/motul/temperatures"
+DEFAULT_AGENT_PORT = 8765
+DEFAULT_DISCOVERY_CIDR = ""  # example: 10.50.0.0/24
 FIGSIZE      = (15, 10)
 RIGHT_MARGIN = 0.75                             # legend area
 LEGEND_ANCHOR= (0.99, 1.05)
@@ -31,11 +33,16 @@ import contextlib
 import subprocess
 import shutil
 import math
+import json
+import ipaddress
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from threading  import Thread, Lock, Event
 from pathlib    import Path
 from collections import deque
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 import logging
 import pandas as pd
@@ -56,6 +63,22 @@ from daqhats import mcc134, HatIDs, hat_list, TcTypes
 CSV_DIR: Path
 RAW_SOC: Path
 RAW_FLUID: Path
+AGENT_PORT: int
+DISCOVERY_CIDR: str
+
+
+@dataclass
+class WorkerInfo:
+    """Runtime identity for one worker node."""
+
+    ip: str
+    node_id: str
+    hostname: str = ""
+    source: str = "ssh"
+
+    @property
+    def label(self) -> str:
+        return self.hostname or self.node_id or self.ip
 
 
 class DataWriter:
@@ -125,9 +148,12 @@ class UnifiedMonitor(ttk.Frame):
             ttk.Style(master).configure(".", font=BIG_FONT, padding=6)
 
         # live data
-        self.cl_lock=Lock(); self.tc_lock=Lock()
-        self.cl_df=pd.DataFrame(columns=["Time","Node","Temp","Clock"])
+        self.cl_lock=Lock(); self.tc_lock=Lock(); self.nodes_lock=Lock()
+        self.cl_df=pd.DataFrame(columns=["Time","Node","Temp","Clock","Usage"])
         self.tc_df=pd.DataFrame(columns=["Time","Channel","Temp"])
+        self.node_ips: list[str] = []
+        self.worker_info: dict[str, WorkerInfo] = {}
+        self.polling_nodes: set[str] = set()
 
         # state flags
         self.stop=Event(); self.alive=True
@@ -144,17 +170,20 @@ class UnifiedMonitor(ttk.Frame):
 
         if not self.headless:
             self._build_ui()
-        self.local_ip=socket.gethostbyname(socket.gethostname())
-        self.node_ips=self._load_nodes(); self._show_connection_status()
+        self.local_ip = self._get_local_ip()
 
-        # workers
-        for ip in self.node_ips:
-            Thread(target=self._poll_node, args=(ip,), daemon=True).start()
-        self.hat = self._init_hat()
-        Thread(target=self._tc_worker, daemon=True).start()
-
+        # File writers must exist before polling threads can add rows.
         self.soc_writer = DataWriter(RAW_SOC)
         self.fluid_writer = DataWriter(RAW_FLUID)
+
+        self.node_ips = self._load_nodes()
+        self._discover_and_add_nodes()
+        self._ensure_node_pollers(self.node_ips)
+        self._show_connection_status()
+
+        self.hat = self._init_hat()
+        Thread(target=self._tc_worker, daemon=True).start()
+        Thread(target=self._discovery_worker, daemon=True).start()
 
         if not self.headless:
             self.plot_id = self.after(1000, self._refresh_plot)
@@ -228,25 +257,36 @@ class UnifiedMonitor(ttk.Frame):
         """Add a message to the GUI log and the logger."""
         logging.info(msg)
         self.log.appendleft(f"{datetime.now():%H:%M:%S}  {msg}")
+        if self.headless:
+            return
         for i, lb in enumerate(self.log_labels):
             lb.config(text=self.log[i] if i < len(self.log) else "")
 
     # ───── banner helpers ─────
     def _show_connection_status(self):
+        if self.headless:
+            return
         if hat_list(HatIDs.MCC_134):
             self.hat_banner.configure(text="MCC-134 HAT : OK",background="green",foreground="white")
         else:
             self.hat_banner.configure(text="MCC-134 HAT : NOT FOUND",background="red",foreground="white")
         bad=[]
-        for ip in set(self.node_ips):
+        for ip in sorted(set(self.node_ips)):
+            if ip in self.worker_info and self.worker_info[ip].source == "agent":
+                if self._agent_status(ip, timeout=0.5) is None:
+                    bad.append(ip)
+                continue
             try: subprocess.check_output(f"ssh {SSH_OPTS} pi@{ip} 'echo ok'",shell=True,timeout=4)
             except subprocess.SubprocessError: bad.append(ip)
         if bad:
             self.node_banner.configure(text="Nodes missing: "+", ".join(bad),
                                        background="red",foreground="white")
-        else:
-            self.node_banner.configure(text="All nodes reachable",
+        elif self.node_ips:
+            self.node_banner.configure(text=f"Nodes reachable: {len(set(self.node_ips))}",
                                        background="green",foreground="white")
+        else:
+            self.node_banner.configure(text="No nodes found",
+                                       background="orange",foreground="black")
 
     # ───── helpers ─────
     def _toggle_full(self):
@@ -296,15 +336,24 @@ class UnifiedMonitor(ttk.Frame):
         self.log_msg("Rebooting nodes…")
         workers=[ip for ip in set(self.node_ips) if ip!=self.local_ip]
         for ip in workers:
-            subprocess.Popen(f"ssh {SSH_OPTS} pi@{ip} 'sudo reboot &'",shell=True)
+            if ip in self.worker_info and self.worker_info[ip].source == "agent":
+                self._agent_request(ip, "/reboot", method="POST", timeout=1)
+            else:
+                subprocess.Popen(f"ssh {SSH_OPTS} pi@{ip} 'sudo reboot &'",shell=True)
         time.sleep(5)
         for ip in workers:
             while True:
-                try:
-                    subprocess.check_output(f"ssh {SSH_OPTS} pi@{ip} 'echo ok'",
-                                            shell=True,timeout=5)
-                    break
-                except subprocess.SubprocessError: time.sleep(2)
+                if ip in self.worker_info and self.worker_info[ip].source == "agent":
+                    if self._agent_status(ip, timeout=2) is not None:
+                        break
+                else:
+                    try:
+                        subprocess.check_output(f"ssh {SSH_OPTS} pi@{ip} 'echo ok'",
+                                                shell=True,timeout=5)
+                        break
+                    except subprocess.SubprocessError:
+                        pass
+                time.sleep(2)
         self.log_msg("All nodes back online")
         self._show_connection_status()
         self.reboot_btn.configure(state=tk.NORMAL)
@@ -365,6 +414,15 @@ class UnifiedMonitor(ttk.Frame):
         rem_cmd=("stress-ng --cpu 0 --cpu-load 100 --io 2 --matrix 0 "
                  "--vm 4 --vm-bytes 95% --memcpy 2 "+t_opt).replace('"','\\"')
         for ip in set(self.node_ips):
+            if ip in self.worker_info and self.worker_info[ip].source == "agent":
+                self._agent_request(
+                    ip,
+                    "/stress/start",
+                    method="POST",
+                    payload={"seconds": seconds},
+                    timeout=3,
+                )
+                continue
             subprocess.Popen(f"ssh {SSH_OPTS} pi@{ip} \"{gov}\"",shell=True)
             if ip!=self.local_ip:
                 subprocess.Popen(f"ssh {SSH_OPTS} pi@{ip} "
@@ -373,7 +431,10 @@ class UnifiedMonitor(ttk.Frame):
         tools='pkill -9 -f "stress-ng" ; pkill -9 -f "stress "'
         subprocess.call(tools,shell=True)
         for ip in set(self.node_ips):
-            subprocess.Popen(f"ssh {SSH_OPTS} pi@{ip} \"{tools}\"",shell=True)
+            if ip in self.worker_info and self.worker_info[ip].source == "agent":
+                self._agent_request(ip, "/stress/stop", method="POST", timeout=2)
+            else:
+                subprocess.Popen(f"ssh {SSH_OPTS} pi@{ip} \"{tools}\"",shell=True)
 
     # ───── timer / banner ─────
     def _tick(self):
@@ -409,8 +470,21 @@ class UnifiedMonitor(ttk.Frame):
         self.tick_id=self.after(1000,self._tick)
 
     # ───── node polling + raw CSV ─────
+    def _get_local_ip(self) -> str:
+        """Return the outbound IP address without depending on hostname DNS."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
+
     def _load_nodes(self):
+        """Load optional static SSH fallback nodes from NODES_FILE."""
         if not os.path.exists(NODES_FILE):
+            if DISCOVERY_CIDR:
+                logging.info("%s missing; relying on agent discovery", NODES_FILE)
+                return []
             messagebox.showerror("Config",f"{NODES_FILE} missing"); sys.exit(1)
         ips=[]
         with open(NODES_FILE) as f:
@@ -420,7 +494,105 @@ class UnifiedMonitor(ttk.Frame):
                 parts=ln.split(); ip=parts[0]
                 slots=int(parts[1].split("=")[1]) if len(parts)>1 and "=" in parts[1] else 1
                 ips.extend([ip]*slots)
+                self.worker_info.setdefault(
+                    ip,
+                    WorkerInfo(ip=ip, node_id=ip, hostname=ip, source="ssh"),
+                )
         return ips
+
+    def _agent_url(self, ip: str, path: str) -> str:
+        return f"http://{ip}:{AGENT_PORT}{path}"
+
+    def _agent_request(
+        self,
+        ip: str,
+        path: str,
+        method: str = "GET",
+        payload: dict | None = None,
+        timeout: float = 1.0,
+    ) -> dict | None:
+        data = None
+        headers = {}
+        if payload is not None:
+            data = json.dumps(payload).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(
+            self._agent_url(ip, path),
+            data=data,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                raw = resp.read().decode("utf-8")
+                return json.loads(raw) if raw else {}
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            return None
+
+    def _agent_status(self, ip: str, timeout: float = 1.0) -> dict | None:
+        return self._agent_request(ip, "/status", timeout=timeout)
+
+    def _discover_agent_nodes(self) -> dict[str, WorkerInfo]:
+        """Scan the configured CIDR and return worker agents that answer."""
+        if not DISCOVERY_CIDR:
+            return {}
+        try:
+            hosts = [str(h) for h in ipaddress.ip_network(DISCOVERY_CIDR, strict=False).hosts()]
+        except ValueError as exc:
+            logging.warning("Invalid discovery CIDR %r: %s", DISCOVERY_CIDR, exc)
+            return {}
+
+        found: dict[str, WorkerInfo] = {}
+        with ThreadPoolExecutor(max_workers=64) as pool:
+            futures = {pool.submit(self._agent_status, ip, 0.35): ip for ip in hosts}
+            for fut in as_completed(futures):
+                ip = futures[fut]
+                try:
+                    status = fut.result()
+                except Exception:  # noqa: broad-except
+                    status = None
+                if not status:
+                    continue
+                node_id = str(status.get("id") or ip)
+                hostname = str(status.get("hostname") or node_id)
+                found[ip] = WorkerInfo(
+                    ip=ip,
+                    node_id=node_id,
+                    hostname=hostname,
+                    source="agent",
+                )
+        return found
+
+    def _discover_and_add_nodes(self) -> None:
+        """Add newly discovered worker agents without disturbing SSH fallback nodes."""
+        discovered = self._discover_agent_nodes()
+        if not discovered:
+            return
+        with self.nodes_lock:
+            changed = False
+            for ip, info in discovered.items():
+                self.worker_info[ip] = info
+                if ip not in self.node_ips:
+                    self.node_ips.append(ip)
+                    changed = True
+            if changed:
+                self.log_msg(f"Discovered {len(discovered)} worker agent(s)")
+
+    def _discovery_worker(self) -> None:
+        """Refresh worker discovery periodically while the dashboard is running."""
+        while not self.stop.is_set():
+            self._discover_and_add_nodes()
+            self._ensure_node_pollers(self.node_ips)
+            self.stop.wait(15)
+
+    def _ensure_node_pollers(self, ips: list[str]) -> None:
+        """Start exactly one polling thread per IP."""
+        with self.nodes_lock:
+            new_ips = [ip for ip in set(ips) if ip not in self.polling_nodes]
+            self.polling_nodes.update(new_ips)
+        for ip in new_ips:
+            Thread(target=self._poll_node, args=(ip,), daemon=True).start()
+
     def _save_raw_soc(self, row: pd.Series) -> None:
         """Queue a SoC temperature row for disk writing."""
         self.soc_writer.write_row(row)
@@ -431,16 +603,34 @@ class UnifiedMonitor(ttk.Frame):
 
     def _poll_node(self,ip):
         while not self.stop.is_set():
-            t,c=self._read_stats(ip); now=datetime.now()
-            if t==0: time.sleep(1); continue     # filter failed SSH reading
-            row=pd.Series({"Time":now,"Node":ip,"Temp":t,"Clock":c})
+            t,c,u=self._read_stats(ip); now=datetime.now()
+            if t==0: time.sleep(1); continue     # filter failed reading
+            info = self.worker_info.get(ip)
+            label = info.label if info else ip
+            row=pd.Series({"Time":now,"Node":label,"Temp":t,"Clock":c,"Usage":u})
             self._save_raw_soc(row)
             with self.cl_lock:
                 self.cl_df=pd.concat([self.cl_df,row.to_frame().T],ignore_index=True)
                 self._trim(self.cl_df)
             time.sleep(1)
-    def _read_stats(self, ip: str) -> tuple[float, int]:
-        """Read temperature and clock from a node via SSH."""
+
+    def _read_stats(self, ip: str) -> tuple[float, float, float | None]:
+        """Read temperature, clock, and optional CPU usage from a node."""
+        status = self._agent_status(ip, timeout=0.8)
+        if status:
+            node_id = str(status.get("id") or ip)
+            hostname = str(status.get("hostname") or node_id)
+            self.worker_info[ip] = WorkerInfo(
+                ip=ip,
+                node_id=node_id,
+                hostname=hostname,
+                source="agent",
+            )
+            return (
+                float(status.get("cpu_temp_c") or 0),
+                float(status.get("cpu_clock_mhz") or 0),
+                status.get("cpu_usage_percent"),
+            )
         try:
             if ip == self.local_ip:
                 t = float(open("/sys/class/thermal/thermal_zone0/temp").read()) / 1000
@@ -449,7 +639,7 @@ class UnifiedMonitor(ttk.Frame):
                         "/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq"
                     ).read()
                 ) / 1000
-                return t, c
+                return t, c, None
             t = float(
                 subprocess.check_output(
                     f"ssh {SSH_OPTS} pi@{ip} cat /sys/class/thermal/thermal_zone0/temp",
@@ -462,13 +652,13 @@ class UnifiedMonitor(ttk.Frame):
                     shell=True,
                 ).strip()
             ) / 1000
-            return t, c
+            return t, c, None
         except subprocess.SubprocessError as exc:
-            logging.warning("SSH read failed for %s: %s", ip, exc)
-            return 0, 0
+            logging.warning("Node read failed for %s: %s", ip, exc)
+            return 0, 0, None
         except Exception as exc:  # noqa: broad-except
             logging.exception("Error reading stats from %s", ip)
-            return 0, 0
+            return 0, 0, None
     @staticmethod
     def _trim(df):
         cutoff=datetime.now()-timedelta(hours=DISPLAY_H)
@@ -520,13 +710,23 @@ class UnifiedMonitor(ttk.Frame):
     def _refresh_plot(self):
         self.ax.cla(); lines=[]; labels=[]
         with self.cl_lock: d=self.cl_df.copy()
-        cmap={ip:self.COLORS[i%len(self.COLORS)] for i,ip in enumerate(sorted(set(self.node_ips)))}
-        for ip,col in cmap.items():
-            s=d[(d.Node==ip)&(d.Temp>0)]
+        with self.nodes_lock:
+            node_labels = sorted(
+                {
+                    (self.worker_info[ip].label if ip in self.worker_info else ip)
+                    for ip in self.node_ips
+                }
+            )
+        cmap={node:self.COLORS[i%len(self.COLORS)] for i,node in enumerate(node_labels)}
+        for node,col in cmap.items():
+            s=d[(d.Node==node)&(d.Temp>0)]
             if not s.empty:
                 l,=self.ax.plot(s.Time,s.Temp,color=col,linewidth=2.2)
                 tb=fr"$\mathbf{{{s.Temp.iloc[-1]:.1f}\,°C}}$"
-                labels.append(f"{ip}  {s.Clock.iloc[-1]/1000:.2f} GHz\n{tb}"); lines.append(l)
+                usage = ""
+                if "Usage" in s and pd.notna(s.Usage.iloc[-1]):
+                    usage = f"  CPU {float(s.Usage.iloc[-1]):.0f}%"
+                labels.append(f"{node}  {s.Clock.iloc[-1]/1000:.2f} GHz{usage}\n{tb}"); lines.append(l)
         with self.tc_lock: f=self.tc_df.copy()
         offset=len(cmap)
         for idx,ch in enumerate(self.FLUID_ORDER):
@@ -607,7 +807,7 @@ class UnifiedMonitor(ttk.Frame):
             self.soc_writer.flush()
             self.fluid_writer.flush()
 
-            soc_cols = ["Time", "Node", "Temp", "Clock"]
+            soc_cols = ["Time", "Node", "Temp", "Clock", "Usage"]
             if RAW_SOC.exists() and RAW_SOC.stat().st_size > 0:
                 try:
                     soc_src = pd.read_csv(RAW_SOC, parse_dates=["Time"])
@@ -633,12 +833,18 @@ class UnifiedMonitor(ttk.Frame):
         # relative-minute column
         cl["Time"] = pd.to_datetime(cl["Time"], errors="coerce")
         fl["Time"] = pd.to_datetime(fl["Time"], errors="coerce")
-        ref=self.stress_start if self.stress_start else cl["Time"].iloc[0]
+        if cl.empty and fl.empty:
+            self.log_msg("No data to export")
+            return
+        if not cl.empty:
+            ref = self.stress_start if self.stress_start else cl["Time"].iloc[0]
+        else:
+            ref = self.stress_start if self.stress_start else fl["Time"].iloc[0]
         cl["rel_min"]=cl["Time"].sub(ref).dt.total_seconds().div(60)
         fl["rel_min"]=fl["Time"].sub(ref).dt.total_seconds().div(60)
 
         # average down to keep file light while retaining node/channel info
-        cl = self._avg_df(cl, ["Temp", "Clock", "rel_min"], ["Node"])
+        cl = self._avg_df(cl, ["Temp", "Clock", "Usage", "rel_min"], ["Node"])
         fl = self._avg_df(fl, ["Temp", "rel_min"], ["Channel"])
 
         # pivot (ensure only numeric columns are aggregated)
@@ -747,10 +953,23 @@ def main():
     parser.add_argument(
         "--headless", action="store_true", help="Run without showing the GUI"
     )
+    parser.add_argument(
+        "--agent-port",
+        type=int,
+        default=DEFAULT_AGENT_PORT,
+        help="HTTP worker-agent port",
+    )
+    parser.add_argument(
+        "--discovery-cidr",
+        default=DEFAULT_DISCOVERY_CIDR,
+        help="CIDR range to scan for worker agents, e.g. 10.50.0.0/24",
+    )
     args = parser.parse_args()
 
-    global NODES_FILE, CSV_DIR, RAW_SOC, RAW_FLUID
+    global NODES_FILE, CSV_DIR, RAW_SOC, RAW_FLUID, AGENT_PORT, DISCOVERY_CIDR
     NODES_FILE = args.nodes_file
+    AGENT_PORT = args.agent_port
+    DISCOVERY_CIDR = args.discovery_cidr
     CSV_DIR = Path(args.csv_dir)
     CSV_DIR.mkdir(parents=True, exist_ok=True)
     RAW_SOC = CSV_DIR / "raw_soc.csv"
