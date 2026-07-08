@@ -3,6 +3,7 @@ set -euo pipefail
 
 LOG_FILE="/boot/firmware/immersionmonitor-firstboot.log"
 BOOT_CMDLINE="/boot/firmware/cmdline.txt"
+WIFI_ENV="/boot/firmware/immersionmonitor-wifi.env"
 INSTALL_DIR="${IMMERSIONMONITOR_INSTALL_DIR:-/opt/immersionmonitor}"
 REPO_OWNER="${IMMERSIONMONITOR_REPO_OWNER:-ramorimdias}"
 REPO_NAME="${IMMERSIONMONITOR_REPO_NAME:-immersionmonitor}"
@@ -24,6 +25,63 @@ cleanup_cmdline() {
       -e 's# *systemd.unit=kernel-command-line.target##g' \
       "${BOOT_CMDLINE}"
   fi
+}
+
+configure_wifi() {
+  if [[ ! -f "${WIFI_ENV}" ]]; then
+    echo "No Wi-Fi config file found; skipping Wi-Fi setup."
+    return 0
+  fi
+
+  # shellcheck disable=SC1090
+  source "${WIFI_ENV}"
+  if [[ -z "${WIFI_SSID_B64:-}" || -z "${WIFI_PASSWORD_B64:-}" ]]; then
+    echo "Wi-Fi config file exists but SSID or password is missing."
+    return 0
+  fi
+
+  ssid="$(printf '%s' "${WIFI_SSID_B64}" | base64 -d)"
+  password="$(printf '%s' "${WIFI_PASSWORD_B64}" | base64 -d)"
+  country="${WIFI_COUNTRY:-FR}"
+
+  echo "Configuring Wi-Fi SSID: ${ssid}"
+  mkdir -p /etc/NetworkManager/system-connections
+  cat > /etc/NetworkManager/system-connections/immersionmonitor-worker-wifi.nmconnection <<EOF
+[connection]
+id=immersionmonitor-worker-wifi
+type=wifi
+interface-name=wlan0
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid=${ssid}
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${password}
+
+[ipv4]
+method=auto
+
+[ipv6]
+method=auto
+addr-gen-mode=default
+EOF
+  chmod 600 /etc/NetworkManager/system-connections/immersionmonitor-worker-wifi.nmconnection
+
+  # Fallback for images still using wpa_supplicant.
+  mkdir -p /etc/wpa_supplicant
+  cat > /etc/wpa_supplicant/wpa_supplicant.conf <<EOF
+country=${country}
+ctrl_interface=DIR=/var/run/wpa_supplicant GROUP=netdev
+update_config=1
+network={
+    ssid="${ssid}"
+    psk="${password}"
+}
+EOF
+  chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
 }
 
 install_second_stage_service() {
@@ -121,6 +179,7 @@ main() {
       fi
       ;;
     *)
+      configure_wifi
       install_second_stage_service
       cleanup_cmdline
       sync
