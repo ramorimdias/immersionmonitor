@@ -21,7 +21,8 @@ It changes the screen layout so the graph remains readable and the user can unde
 ```text
 Graph and configuration are separated into two tabs
 The Graph tab gives the plot almost the full window
-The Configuration / Workers tab contains controls, discovery status, and the worker table
+The Graph tab includes a compact quick-actions bar for Start Log, Stop Log, and stress start/stop
+The Configuration / Workers tab contains discovery, sequence settings, maintenance actions, and the worker table
 The new dashboard defaults to worker-agent discovery only
 It does not read /home/motul/nodes_ips unless --nodes-file is explicitly provided
 Bench status cards show MCC-134 and worker count

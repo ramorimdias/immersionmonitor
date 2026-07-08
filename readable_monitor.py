@@ -17,7 +17,6 @@ from datetime import datetime
 from pathlib import Path
 from threading import Lock
 
-import pandas as pd
 import tkinter as tk
 from tkinter import ttk
 
@@ -74,7 +73,7 @@ class ReadableMonitor(core.UnifiedMonitor):
 
         self._build_graph_tab()
         self._build_config_tab()
-        self.node_refresh_id = self.after(1000, self._refresh_node_table)
+        self.node_refresh_id = self.after(2000, self._refresh_node_table)
 
     def _build_graph_tab(self) -> None:
         """Graph tab gets almost the full window."""
@@ -87,9 +86,23 @@ class ReadableMonitor(core.UnifiedMonitor):
         ).pack(side=tk.LEFT)
         ttk.Label(
             graph_header,
-            text="Workers and MCC-134 thermocouples. Controls and discovery are in the second tab.",
+            text="Workers and MCC-134 thermocouples. Quick actions are here; discovery and advanced controls are in the second tab.",
             anchor="e",
         ).pack(side=tk.RIGHT, fill=tk.X, expand=True)
+
+        quick = ttk.LabelFrame(self.graph_tab, text="Quick actions", style="Section.TLabelframe")
+        quick.pack(fill=tk.X, padx=6, pady=(0, 4))
+        ttk.Button(quick, text="Start Log", command=self._start_log).pack(side=tk.LEFT, padx=4, pady=4)
+        ttk.Button(quick, text="Stop Log", command=self._stop_log).pack(side=tk.LEFT, padx=4, pady=4)
+        self.start_btn = ttk.Button(quick, text="Start Stress", command=self._start_sequence)
+        self.start_btn.pack(side=tk.LEFT, padx=8, pady=4)
+        self.stop_btn = ttk.Button(quick, text="Stop", state=tk.DISABLED, command=self._ask_stop_stress)
+        self.stop_btn.pack(side=tk.LEFT, padx=2, pady=4)
+        ttk.Label(
+            quick,
+            text="Advanced controls stay in the Configuration / Workers tab.",
+            anchor="e",
+        ).pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=8, pady=4)
 
         self.fig, self.ax = core.plt.subplots(1, 1, figsize=core.FIGSIZE, dpi=core.PLOT_DPI)
         self.fig.subplots_adjust(top=0.96, left=0.06, right=core.RIGHT_MARGIN, bottom=0.13)
@@ -107,29 +120,26 @@ class ReadableMonitor(core.UnifiedMonitor):
         controls = ttk.Frame(self.config_tab)
         controls.pack(fill=tk.X, padx=6, pady=6)
 
-        log_box = ttk.LabelFrame(controls, text="Logging", style="Section.TLabelframe")
+        log_box = ttk.LabelFrame(controls, text="Maintenance", style="Section.TLabelframe")
         log_box.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
-        ttk.Button(log_box, text="Start Log", command=self._start_log).pack(side=tk.LEFT, padx=2)
-        ttk.Button(log_box, text="Stop Log", command=self._stop_log).pack(side=tk.LEFT, padx=2)
         ttk.Button(log_box, text="Save XLSX", command=self._ask_write_excel).pack(side=tk.LEFT, padx=2)
         ttk.Button(log_box, text="Clear ALL", command=self._clear_all).pack(side=tk.LEFT, padx=2)
 
-        test_box = ttk.LabelFrame(controls, text="Test sequence", style="Section.TLabelframe")
-        test_box.pack(side=tk.LEFT, fill=tk.Y, padx=6)
-        self._add_spinner(test_box, "Stress", 30, attr="stress_min")
-        self._add_spinner(test_box, "Cooling", 30, attr="cool_min")
-        self._add_spinner(test_box, "Wait", 0, attr="wait_min")
-        self.start_btn = ttk.Button(test_box, text="Start Stress", command=self._start_sequence)
-        self.start_btn.pack(side=tk.LEFT, padx=6)
-        self.stop_btn = ttk.Button(test_box, text="Stop", state=tk.DISABLED, command=self._ask_stop_stress)
-        self.stop_btn.pack(side=tk.LEFT, padx=2)
+        sequence_box = ttk.LabelFrame(controls, text="Sequence settings", style="Section.TLabelframe")
+        sequence_box.pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        self._add_spinner(sequence_box, "Stress", 30, attr="stress_min")
+        self._add_spinner(sequence_box, "Cooling", 30, attr="cool_min")
+        self._add_spinner(sequence_box, "Wait", 0, attr="wait_min")
+
+        cool_box = ttk.LabelFrame(controls, text="Cooling", style="Section.TLabelframe")
+        cool_box.pack(side=tk.LEFT, fill=tk.Y, padx=6)
         self.skip_btn = ttk.Button(
-            test_box,
+            cool_box,
             text="Skip Cooling",
             state=tk.DISABLED,
             command=self._ask_skip_cooling,
         )
-        self.skip_btn.pack(side=tk.LEFT, padx=2)
+        self.skip_btn.pack(side=tk.LEFT, padx=2, pady=2)
 
         node_actions = ttk.LabelFrame(controls, text="Node actions", style="Section.TLabelframe")
         node_actions.pack(side=tk.LEFT, fill=tk.Y, padx=6)
@@ -328,10 +338,10 @@ class ReadableMonitor(core.UnifiedMonitor):
                     "source": info.source if info else "unknown",
                 }
 
-            row = pd.Series({"Time": now, "Node": label, "Temp": temp, "Clock": clock, "Usage": usage})
+            row = {"Time": now, "Node": label, "Temp": temp, "Clock": clock, "Usage": usage}
             self._save_raw_soc(row)
             with self.cl_lock:
-                self.cl_df = pd.concat([self.cl_df, row.to_frame().T], ignore_index=True)
+                self._append_live_row(self.cl_df, row)
                 self._trim(self.cl_df)
             self.stop.wait(1)
 
@@ -347,6 +357,7 @@ class ReadableMonitor(core.UnifiedMonitor):
         with self.metrics_lock:
             metrics = {ip: dict(v) for ip, v in self.last_metrics.items()}
 
+        online_count = 0
         for ip in nodes:
             info = self.worker_info.get(ip)
             m = metrics.get(ip, {})
@@ -355,6 +366,7 @@ class ReadableMonitor(core.UnifiedMonitor):
             last_seen = m.get("last_seen")
             online = bool(m.get("online")) and last_seen and (now - last_seen).total_seconds() <= self.ONLINE_AFTER_SECONDS
             if online:
+                online_count += 1
                 state = "Online"
                 tag = "online"
                 age = f"{int((now - last_seen).total_seconds())}s ago"
@@ -392,12 +404,11 @@ class ReadableMonitor(core.UnifiedMonitor):
                     text="No workers configured. Start with --discovery-cidr 10.50.0.0/24. Static SSH nodes are disabled unless --nodes-file is explicitly provided."
                 )
         else:
-            online = self._online_node_count()
             self.node_help_lbl.configure(
-                text=f"{online}/{len(rows)} workers online. Missing workers usually mean power, cable, subnet, or agent service issue."
+                text=f"{online_count}/{len(rows)} workers online. Missing workers usually mean power, cable, subnet, or agent service issue."
             )
 
-        self.node_refresh_id = self.after(1000, self._refresh_node_table)
+        self.node_refresh_id = self.after(2000, self._refresh_node_table)
 
     def _refresh_plot(self):
         super()._refresh_plot()

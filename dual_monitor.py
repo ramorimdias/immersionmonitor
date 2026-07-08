@@ -90,10 +90,13 @@ class DataWriter:
         self.buffer: list[dict] = []
         self.lock = Lock()
 
-    def write_row(self, row: pd.Series) -> None:
+    def write_row(self, row) -> None:
         """Add a single row to the buffer and flush if needed."""
         with self.lock:
-            self.buffer.append(row.to_dict())
+            if hasattr(row, "to_dict"):
+                self.buffer.append(row.to_dict())
+            else:
+                self.buffer.append(dict(row))
             if len(self.buffer) >= self.flush_every:
                 self.flush()
 
@@ -188,6 +191,12 @@ class UnifiedMonitor(ttk.Frame):
         if not self.headless:
             self.plot_id = self.after(1000, self._refresh_plot)
             self.tick_id = self.after(1000, self._tick)
+
+    @staticmethod
+    def _append_live_row(df: pd.DataFrame, row: dict) -> None:
+        """Append a single row without rebuilding the whole frame."""
+        next_index = 0 if df.empty else int(df.index[-1]) + 1
+        df.loc[next_index] = [row.get(col) for col in df.columns]
 
     # ───── UI ─────
     def _build_ui(self):
@@ -593,7 +602,7 @@ class UnifiedMonitor(ttk.Frame):
         for ip in new_ips:
             Thread(target=self._poll_node, args=(ip,), daemon=True).start()
 
-    def _save_raw_soc(self, row: pd.Series) -> None:
+    def _save_raw_soc(self, row) -> None:
         """Queue a SoC temperature row for disk writing."""
         self.soc_writer.write_row(row)
 
@@ -607,10 +616,10 @@ class UnifiedMonitor(ttk.Frame):
             if t==0: time.sleep(1); continue     # filter failed reading
             info = self.worker_info.get(ip)
             label = info.label if info else ip
-            row=pd.Series({"Time":now,"Node":label,"Temp":t,"Clock":c,"Usage":u})
+            row={"Time":now,"Node":label,"Temp":t,"Clock":c,"Usage":u}
             self._save_raw_soc(row)
             with self.cl_lock:
-                self.cl_df=pd.concat([self.cl_df,row.to_frame().T],ignore_index=True)
+                self._append_live_row(self.cl_df, row)
                 self._trim(self.cl_df)
             time.sleep(1)
 
@@ -700,16 +709,21 @@ class UnifiedMonitor(ttk.Frame):
             if v and v not in (mcc134.OPEN_TC_VALUE,mcc134.OVERRANGE_TC_VALUE,mcc134.COMMON_MODE_TC_VALUE):
                 temps[ch]=round(v,2)
         if temps:
-            df=pd.DataFrame([{"Time":ts,"Channel":c,"Temp":t} for c,t in temps.items()])
+            rows=[{"Time":ts,"Channel":c,"Temp":t} for c,t in temps.items()]
+            df=pd.DataFrame(rows)
             self._save_raw_fluid(df)
             with self.tc_lock:
-                self.tc_df=pd.concat([self.tc_df,df],ignore_index=True)
+                for row in rows:
+                    self._append_live_row(self.tc_df, row)
                 self._trim(self.tc_df)
 
     # ───── plot refresh ─────
     def _refresh_plot(self):
-        self.ax.cla(); lines=[]; labels=[]
-        with self.cl_lock: d=self.cl_df.copy()
+        self.ax.cla()
+        lines = []
+        labels = []
+        with self.cl_lock:
+            d = self.cl_df.copy()
         with self.nodes_lock:
             node_labels = sorted(
                 {
@@ -737,11 +751,15 @@ class UnifiedMonitor(ttk.Frame):
                 tb=fr"$\mathbf{{{s.Temp.iloc[-1]:.1f}\,°C}}$"
                 labels.append(f"Ch {ch} ({self.NAMES[ch]})\n{tb}"); lines.append(l)
 
-        all_vals=list(d.Temp[d.Temp>0])+list(f.Temp[f.Temp>0])
-        if self.manual_ylim: self.ax.set_ylim(self.temp_ylim)
-        elif all_vals:
-            ymin=min(all_vals); ymax=max(all_vals); pad=5
-            self.ax.set_ylim(ymin-pad, ymax+pad)
+        temp_mins = [series.min() for series in (d["Temp"], f["Temp"]) if not series.empty]
+        temp_maxs = [series.max() for series in (d["Temp"], f["Temp"]) if not series.empty]
+        if self.manual_ylim:
+            self.ax.set_ylim(self.temp_ylim)
+        elif temp_mins and temp_maxs:
+            ymin = min(temp_mins)
+            ymax = max(temp_maxs)
+            pad = 5
+            self.ax.set_ylim(ymin - pad, ymax + pad)
         self.ax.set_ylabel("Temperature (°C)")
 
         locator = AutoDateLocator(minticks=4, maxticks=8, interval_multiples=True)
@@ -749,10 +767,15 @@ class UnifiedMonitor(ttk.Frame):
         locator.intervald[matplotlib.dates.SECONDLY] = [1, 2, 5, 10, 15, 30]
         locator.intervald[matplotlib.dates.MINUTELY] = [1, 2, 5, 10, 15, 30]
         fmt = ConciseDateFormatter(locator)
-        all_t=list(d.Time)+list(f.Time)
-        if all_t:
-            xmin,xmax=min(all_t),max(all_t);  xmax=(xmin+timedelta(seconds=1)) if xmin==xmax else xmax
-            self.ax.set_xlim(xmin,xmax); self.ax.xaxis.set_major_locator(locator); self.ax.xaxis.set_major_formatter(fmt)
+        time_mins = [series.min() for series in (d["Time"], f["Time"]) if not series.empty]
+        time_maxs = [series.max() for series in (d["Time"], f["Time"]) if not series.empty]
+        if time_mins and time_maxs:
+            xmin = min(time_mins)
+            xmax = max(time_maxs)
+            xmax = (xmin + timedelta(seconds=1)) if xmin == xmax else xmax
+            self.ax.set_xlim(xmin, xmax)
+            self.ax.xaxis.set_major_locator(locator)
+            self.ax.xaxis.set_major_formatter(fmt)
         for t in self.ax.get_xticklabels(): t.set_rotation(45); t.set_ha('right')
         self.ax.yaxis.grid(True,ls="--",lw=0.5)
         if lines:
