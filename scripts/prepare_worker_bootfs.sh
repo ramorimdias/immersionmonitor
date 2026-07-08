@@ -32,6 +32,8 @@ if [[ ! -d "${BOOTFS}" ]]; then
 fi
 
 CMDLINE="${BOOTFS}/cmdline.txt"
+FIRSTRUN="${BOOTFS}/firstrun.sh"
+IMAGER_FIRSTRUN="${BOOTFS}/firstrun-imager.sh"
 if [[ ! -f "${CMDLINE}" ]]; then
   echo "ERROR: ${CMDLINE} not found. Did you select the FAT boot partition?" >&2
   exit 1
@@ -46,13 +48,32 @@ fi
 chmod 755 "${BOOTFS}/${FIRSTBOOT_NAME}"
 
 HOOK="systemd.run=/boot/firmware/${FIRSTBOOT_NAME} systemd.run_success_action=reboot systemd.unit=kernel-command-line.target"
+CMDLINE_TEXT="$(tr -d '\n' < "${CMDLINE}")"
 
 if grep -q "systemd.run=/boot/firmware/${FIRSTBOOT_NAME}" "${CMDLINE}"; then
-  echo "First-boot hook already present in cmdline.txt."
+  echo "Worker first-boot hook already present in cmdline.txt."
+elif [[ "${CMDLINE_TEXT}" == *"systemd.run="* && -f "${FIRSTRUN}" ]]; then
+  echo "Raspberry Pi Imager first-run script detected. Wrapping it instead of adding a second systemd.run hook..."
+  if [[ ! -f "${IMAGER_FIRSTRUN}" ]]; then
+    mv "${FIRSTRUN}" "${IMAGER_FIRSTRUN}"
+  fi
+  cat > "${FIRSTRUN}" <<'EOF'
+#!/usr/bin/env bash
+set -e
+LOG=/boot/firmware/immersionmonitor-firstboot.log
+exec >> "$LOG" 2>&1
+printf '\n===== combined Raspberry Pi Imager + immersionmonitor first run: %s =====\n' "$(date --iso-8601=seconds)"
+if [ -x /boot/firmware/firstrun-imager.sh ]; then
+  /boot/firmware/firstrun-imager.sh
+elif [ -f /boot/firmware/firstrun-imager.sh ]; then
+  bash /boot/firmware/firstrun-imager.sh
+fi
+bash /boot/firmware/worker_firstboot.sh
+EOF
+  chmod 755 "${FIRSTRUN}"
 else
   tmp="$(mktemp)"
-  tr -d '\n' < "${CMDLINE}" > "${tmp}"
-  printf ' %s\n' "${HOOK}" >> "${tmp}"
+  printf '%s %s\n' "${CMDLINE_TEXT}" "${HOOK}" > "${tmp}"
   cp "${tmp}" "${CMDLINE}"
   rm -f "${tmp}"
 fi
