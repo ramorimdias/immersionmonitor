@@ -17,6 +17,13 @@ exec > >(tee -a "${LOG_FILE}") 2>&1
 
 echo "===== immersionmonitor worker provisioning: $(date --iso-8601=seconds) ====="
 
+load_boot_config() {
+  if [[ -f "${WIFI_ENV}" ]]; then
+    # shellcheck disable=SC1090
+    source "${WIFI_ENV}"
+  fi
+}
+
 cleanup_cmdline() {
   if [[ -f "${BOOT_CMDLINE}" ]]; then
     sed -i \
@@ -27,16 +34,38 @@ cleanup_cmdline() {
   fi
 }
 
-configure_wifi() {
-  if [[ ! -f "${WIFI_ENV}" ]]; then
-    echo "No Wi-Fi config file found; skipping Wi-Fi setup."
+configure_linux_user() {
+  if [[ -z "${LINUX_USER_B64:-}" || -z "${LINUX_PASSWORD_B64:-}" ]]; then
+    echo "No Linux user fallback configured; skipping user creation."
     return 0
   fi
 
-  # shellcheck disable=SC1090
-  source "${WIFI_ENV}"
+  username="$(printf '%s' "${LINUX_USER_B64}" | base64 -d)"
+  password="$(printf '%s' "${LINUX_PASSWORD_B64}" | base64 -d)"
+
+  if id "${username}" >/dev/null 2>&1; then
+    echo "Linux user ${username} already exists."
+  else
+    echo "Creating Linux user ${username}."
+    useradd -m -s /bin/bash -G sudo,adm,dialout,cdrom,audio,video,plugdev,games,users,input,render,netdev,gpio,i2c,spi "${username}"
+  fi
+
+  echo "${username}:${password}" | chpasswd
+
+  # Avoid passwordless sudo prompts for bench maintenance tasks.
+  cat > "/etc/sudoers.d/010_${username}-bench" <<EOF
+${username} ALL=(ALL) NOPASSWD:ALL
+EOF
+  chmod 440 "/etc/sudoers.d/010_${username}-bench"
+
+  # Disable the interactive first-user service if this image includes it.
+  systemctl disable userconfig.service >/dev/null 2>&1 || true
+  systemctl mask userconfig.service >/dev/null 2>&1 || true
+}
+
+configure_wifi() {
   if [[ -z "${WIFI_SSID_B64:-}" || -z "${WIFI_PASSWORD_B64:-}" ]]; then
-    echo "Wi-Fi config file exists but SSID or password is missing."
+    echo "No Wi-Fi config found; skipping Wi-Fi setup."
     return 0
   fi
 
@@ -167,6 +196,7 @@ install_worker() {
 }
 
 main() {
+  load_boot_config
   case "${1:-}" in
     --install)
       if install_worker; then
@@ -179,6 +209,7 @@ main() {
       fi
       ;;
     *)
+      configure_linux_user
       configure_wifi
       install_second_stage_service
       cleanup_cmdline
