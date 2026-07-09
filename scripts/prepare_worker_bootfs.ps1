@@ -7,7 +7,9 @@ param(
     [string]$RepoName = "immersionmonitor",
     [string]$WifiSsid = "",
     [string]$WifiPassword = "",
-    [string]$WifiCountry = "FR"
+    [string]$WifiCountry = "FR",
+    [string]$LinuxUser = "",
+    [string]$LinuxPassword = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -32,19 +34,33 @@ $FirstBootUrl = "$RawBase/scripts/worker_firstboot.sh"
 Write-Host "Downloading first-boot script..."
 Invoke-WebRequest -Uri $FirstBootUrl -OutFile $FirstBootPath -UseBasicParsing
 
+$EnvLines = @()
+
 if ($WifiSsid -ne "") {
     if ($WifiPassword -eq "") {
         throw "WifiPassword is required when WifiSsid is provided."
     }
-    Write-Host "Writing Wi-Fi configuration for first boot..."
+    Write-Host "Adding Wi-Fi configuration for first boot..."
     $SsidB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($WifiSsid))
     $PasswordB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($WifiPassword))
-    $WifiEnv = @"
-WIFI_SSID_B64=$SsidB64
-WIFI_PASSWORD_B64=$PasswordB64
-WIFI_COUNTRY=$WifiCountry
-"@
-    Set-Content -Path $WifiEnvPath -Value $WifiEnv -Encoding ascii
+    $EnvLines += "WIFI_SSID_B64=$SsidB64"
+    $EnvLines += "WIFI_PASSWORD_B64=$PasswordB64"
+    $EnvLines += "WIFI_COUNTRY=$WifiCountry"
+}
+
+if ($LinuxUser -ne "") {
+    if ($LinuxPassword -eq "") {
+        throw "LinuxPassword is required when LinuxUser is provided."
+    }
+    Write-Host "Adding Linux user fallback for first boot..."
+    $LinuxUserB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($LinuxUser))
+    $LinuxPasswordB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($LinuxPassword))
+    $EnvLines += "LINUX_USER_B64=$LinuxUserB64"
+    $EnvLines += "LINUX_PASSWORD_B64=$LinuxPasswordB64"
+}
+
+if ($EnvLines.Count -gt 0) {
+    Set-Content -Path $WifiEnvPath -Value ($EnvLines -join "`n") -Encoding ascii
 }
 
 Write-Host "Adding first-boot hook to cmdline.txt..."
