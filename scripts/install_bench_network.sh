@@ -11,6 +11,7 @@ BENCH_DHCP_LEASE="${BENCH_DHCP_LEASE:-12h}"
 DHCP_SERVICE="immersion-bench-dhcp.service"
 DHCP_CONFIG="/etc/immersionmonitor/bench-dnsmasq.conf"
 LEASE_FILE="/var/lib/misc/immersion-bench.leases"
+TARGET_IP="${BENCH_HEAD_CIDR%/*}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   SUDO="sudo"
@@ -34,11 +35,20 @@ if ! ip link show "${BENCH_IFACE}" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Safety guard: never start the bench DHCP server while eth0 still appears to
+# be attached to a different network. This avoids accidentally serving DHCP on
+# the company LAN.
+CURRENT_IPV4="$(ip -4 -o addr show dev "${BENCH_IFACE}" scope global 2>/dev/null | awk '{print $4}' | head -n1 || true)"
+if [[ -n "${CURRENT_IPV4}" && "${CURRENT_IPV4%/*}" != "${TARGET_IP}" ]]; then
+  echo "ERROR: ${BENCH_IFACE} currently has ${CURRENT_IPV4}." >&2
+  echo "Disconnect ${BENCH_IFACE} from the company network and connect it to the isolated bench switch before running this installer." >&2
+  exit 1
+fi
+
 echo "Installing DHCP dependency..."
 ${SUDO} apt-get update
 ${SUDO} DEBIAN_FRONTEND=noninteractive apt-get install -y dnsmasq-base
 
-# Warn before changing the interface if it currently carries the only default route.
 DEFAULT_DEVS="$(ip -4 route show default | awk '{print $5}' | sort -u | tr '\n' ' ')"
 if [[ " ${DEFAULT_DEVS} " == *" ${BENCH_IFACE} "* ]] && [[ "${DEFAULT_DEVS}" == "${BENCH_IFACE} " ]]; then
   echo "WARNING: ${BENCH_IFACE} is currently the only IPv4 default-route interface."
@@ -70,15 +80,6 @@ else
     ipv4.never-default yes \
     ipv6.method disabled
 fi
-
-# Prevent another Ethernet profile bound to the same interface from winning at reboot.
-while IFS=: read -r name iface; do
-  [[ -z "${name}" ]] && continue
-  if [[ "${iface}" == "${BENCH_IFACE}" && "${name}" != "${BENCH_CONNECTION}" ]]; then
-    echo "Disabling autoconnect on competing profile: ${name}"
-    ${SUDO} nmcli connection modify "${name}" connection.autoconnect no || true
-  fi
-done < <(nmcli -t -f NAME,connection.interface-name connection show)
 
 ${SUDO} mkdir -p /etc/immersionmonitor /var/lib/misc
 
@@ -125,7 +126,7 @@ ${SUDO} systemctl daemon-reload
 ${SUDO} systemctl enable --now "${DHCP_SERVICE}"
 
 echo
-if ! ip -4 addr show dev "${BENCH_IFACE}" | grep -Fq "${BENCH_HEAD_CIDR%/*}/"; then
+if ! ip -4 addr show dev "${BENCH_IFACE}" | grep -Fq "${TARGET_IP}/"; then
   echo "ERROR: ${BENCH_IFACE} did not receive ${BENCH_HEAD_CIDR}." >&2
   ip -br addr show "${BENCH_IFACE}" || true
   exit 1
