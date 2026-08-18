@@ -22,7 +22,7 @@ from tkinter import ttk
 
 import dual_monitor as core
 
-DEFAULT_READABLE_DISCOVERY_CIDR = "10.50.0.0/24"
+DEFAULT_READABLE_DISCOVERY_CIDR = "192.168.50.0/24"
 
 
 class ReadableMonitor(core.UnifiedMonitor):
@@ -322,7 +322,7 @@ class ReadableMonitor(core.UnifiedMonitor):
     def _discover_agent_nodes(self) -> dict[str, core.WorkerInfo]:
         """Wrap discovery with operator-visible status messages."""
         if not core.DISCOVERY_CIDR:
-            self._schedule_discovery_text("disabled. Start with --discovery-cidr 10.50.0.0/24")
+            self._schedule_discovery_text("disabled. Start with --discovery-cidr 192.168.50.0/24")
             return {}
         self._schedule_discovery_text(f"scanning {core.DISCOVERY_CIDR} on port {core.AGENT_PORT}")
         started = datetime.now()
@@ -444,7 +444,7 @@ class ReadableMonitor(core.UnifiedMonitor):
                 )
             else:
                 self.node_help_lbl.configure(
-                    text="No workers configured. Start with --discovery-cidr 10.50.0.0/24. Static SSH nodes are disabled unless --nodes-file is explicitly provided."
+                    text="No workers configured. Start with --discovery-cidr 192.168.50.0/24. Static SSH nodes are disabled unless --nodes-file is explicitly provided."
                 )
         else:
             self.node_help_lbl.configure(
@@ -483,7 +483,7 @@ def main() -> None:
     parser.add_argument(
         "--discovery-cidr",
         default=DEFAULT_READABLE_DISCOVERY_CIDR,
-        help="CIDR range to scan for worker agents, e.g. 10.50.0.0/24",
+        help="CIDR range to scan for worker agents, e.g. 192.168.50.0/24",
     )
     args = parser.parse_args()
 
