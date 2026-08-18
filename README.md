@@ -1,8 +1,46 @@
-## Recommended worker setup for Raspberry Pi 5
+## Recommended Raspberry Pi 5 bench setup
 
-For Raspberry Pi 5 workers, use the manual installer flow. Do not use the first-boot bootfs provisioning script as the primary method, because it can be opaque during boot and may leave the Pi on a black screen without useful feedback.
+The bench uses an isolated Ethernet network managed by the head Raspberry Pi.
 
-### 1. Flash the worker SD card
+- Head `eth0`: `192.168.50.5/24`
+- Worker addresses: assigned automatically by DHCP
+- DHCP pool: `192.168.50.100` to `192.168.50.199`
+- Worker agent: HTTP on TCP port `8765`
+- Worker discovery: `192.168.50.0/24`
+
+Workers do not need Wi-Fi and do not need a manually assigned static IP.
+
+## 1. Configure the head Pi once
+
+The head should have its company/internet connection on an interface other than the isolated bench `eth0` connection, for example Wi-Fi. Connect `eth0` to the bench switch.
+
+Run on the head while it has internet access:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/install_bench_network.sh | bash
+```
+
+This configures `eth0` as `192.168.50.5/24` and starts a DHCP server bound only to the bench Ethernet interface.
+
+Verify:
+
+```bash
+ip -4 -br addr show eth0
+```
+
+Expected head address:
+
+```text
+eth0    UP    192.168.50.5/24
+```
+
+Check the DHCP service:
+
+```bash
+systemctl status immersion-bench-dhcp.service
+```
+
+## 2. Flash a worker SD card
 
 In Raspberry Pi Imager:
 
@@ -11,21 +49,22 @@ In Raspberry Pi Imager:
 - Password: `<worker-password>`
 - Enable SSH: yes
 - SSH authentication: password authentication
-- Wi-Fi SSID: `<worker-wifi-ssid>`
-- Wi-Fi password: `<worker-wifi-password>`
+- Wi-Fi: not required
 - Wi-Fi country: `FR`
 - Timezone: `Europe/Paris`
 - Keyboard: `fr`
 
-Do not run the Windows bootfs preparation script for this flow.
+Do not use the first-boot bootfs provisioning flow for this setup.
 
-### 2. Boot and log into the worker
+## 3. Temporarily connect the worker to the company network
 
-Boot the worker normally, then log in with the username and password configured in Raspberry Pi Imager.
+For initial installation only, connect the worker Ethernet port to a company wall/network port that provides DHCP and internet access.
 
-Make sure the worker has internet access before continuing.
+Boot the worker and log in with the username and password configured in Raspberry Pi Imager.
 
-### 3. Install the worker agent
+Confirm internet access before continuing.
+
+## 4. Install the worker agent
 
 Run exactly:
 
@@ -33,24 +72,63 @@ Run exactly:
 curl -fsSL https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/install_worker.sh | bash
 ```
 
-The installer installs the required packages, downloads `worker_agent.py`, installs the `bench-worker-agent.service` systemd service, and starts it automatically.
+The installer:
 
-### 4. Verify the worker agent
+- installs the required packages
+- downloads `worker_agent.py`
+- installs and enables `bench-worker-agent.service`
+- keeps Ethernet configured for DHCP and autoconnect
 
-Check the agent locally:
+Verify the agent locally:
 
 ```bash
 curl http://127.0.0.1:8765/status
 ```
 
-Then check the worker network addresses:
+The response should contain the worker status as JSON.
+
+## 5. Move the worker to the bench
+
+Shut the worker down cleanly:
 
 ```bash
-ip -br addr
+sudo poweroff
 ```
 
-The head Raspberry Pi should then be able to reach the worker at:
+Then:
 
-```text
-http://<worker-ip>:8765/status
+1. Disconnect its Ethernet cable from the company network.
+2. Connect its Ethernet cable to the isolated bench switch.
+3. Power the worker on.
+
+No screen, keyboard, Wi-Fi, or further worker-side configuration is required.
+
+The head DHCP server will automatically give the worker an address in the `192.168.50.100` to `192.168.50.199` range.
+
+## 6. Verify the worker from the head
+
+On the head, inspect DHCP leases:
+
+```bash
+cat /var/lib/misc/immersion-bench.leases
 ```
+
+To query every currently leased worker address on port `8765`:
+
+```bash
+for ip in $(awk '{print $3}' /var/lib/misc/immersion-bench.leases); do
+    echo "=== $ip ==="
+    curl -fsS --connect-timeout 1 "http://$ip:8765/status" || echo "agent not responding"
+done
+```
+
+## 7. Start the readable monitor
+
+Use the automatic launcher so the head scans the bench Ethernet subnet:
+
+```bash
+cd /opt/immersionmonitor
+bash scripts/run_readable_monitor_auto.sh
+```
+
+On a head with `192.168.50.5/24` on Ethernet, the launcher scans `192.168.50.0/24` on port `8765` and adds responding worker agents automatically.
