@@ -80,7 +80,7 @@ ensure_ethernet_dhcp() {
 
 echo "Installing bench worker dependencies..."
 ${SUDO} apt-get update
-${SUDO} apt-get install -y python3 stress-ng curl ca-certificates
+${SUDO} apt-get install -y python3 stress-ng curl ca-certificates openssh-server
 
 echo "Installing worker agent into ${INSTALL_DIR}..."
 ${SUDO} mkdir -p "${INSTALL_DIR}"
@@ -97,6 +97,7 @@ rm -f "${TMP_SERVICE}"
 ensure_ethernet_dhcp
 
 ${SUDO} systemctl daemon-reload
+${SUDO} systemctl enable --now ssh
 ${SUDO} systemctl enable --now "${SERVICE_NAME}"
 
 echo
@@ -105,6 +106,7 @@ ${SUDO} systemctl --no-pager --lines=8 status "${SERVICE_NAME}" || true
 echo
 echo "Bench worker agent installed."
 echo "Local check: curl http://127.0.0.1:${AGENT_PORT}/status"
+echo "SSH maintenance: enabled on TCP port 22"
 echo "Ethernet profile: ${WORKER_CONNECTION} (${WORKER_IFACE}, DHCP, autoconnect priority 200)"
 echo "After moving this Pi to the isolated bench switch, the head DHCP server will assign its Ethernet address."
 echo "From the head Pi: discover this node on ${AGENT_PORT}/tcp in 192.168.50.0/24."
