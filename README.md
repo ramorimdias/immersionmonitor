@@ -190,3 +190,27 @@ Each flashed clone automatically:
 After flashing a clone, insert the SD card into another Raspberry Pi, connect it to the bench switch, and power it on. No company-network installation step is needed for cloned workers.
 
 The head DHCP server assigns each clone a different `192.168.50.100` to `192.168.50.199` address, and `readable_monitor.py` discovers each agent automatically.
+
+## 9. Keep the head application updated automatically
+
+Install the head updater once:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/install_head_autoupdate.sh | bash
+```
+
+The systemd timer checks GitHub shortly after every boot and once per day. The boot check starts about 20 seconds after startup. If GitHub is temporarily unreachable, the update service retries every 30 seconds for several minutes.
+
+The updater resets `/opt/immersionmonitor` to the latest `origin/main`, so the desktop shortcut uses the latest code the next time the monitor is launched.
+
+Check the timer with:
+
+```bash
+systemctl status bench-head-update.timer
+```
+
+Check recent update logs with:
+
+```bash
+journalctl -u bench-head-update.service -n 50 --no-pager
+```
