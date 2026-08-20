@@ -64,7 +64,7 @@ Boot the worker and log in with the username and password configured in Raspberr
 
 Confirm internet access before continuing.
 
-## 4. Install the worker agent
+## 4. Install the worker agent and bench Ethernet profile
 
 Run exactly:
 
@@ -77,7 +77,10 @@ The installer:
 - installs the required packages
 - downloads `worker_agent.py`
 - installs and enables `bench-worker-agent.service`
-- keeps Ethernet configured for DHCP and autoconnect
+- creates a dedicated NetworkManager Ethernet profile named `immersion-worker-dhcp`
+- binds that profile to `eth0`
+- configures it for automatic DHCP at boot with high autoconnect priority
+- leaves the current company Ethernet connection alive until shutdown
 
 Verify the agent locally:
 
@@ -85,7 +88,13 @@ Verify the agent locally:
 curl http://127.0.0.1:8765/status
 ```
 
-The response should contain the worker status as JSON.
+Verify the prepared Ethernet profile:
+
+```bash
+nmcli -f NAME,TYPE,DEVICE,AUTOCONNECT connection show immersion-worker-dhcp
+```
+
+The response should show an Ethernet profile with autoconnect enabled. It does not need to be the active profile while the worker is still connected to the company network.
 
 ## 5. Move the worker to the bench
 
@@ -103,7 +112,7 @@ Then:
 
 No screen, keyboard, Wi-Fi, or further worker-side configuration is required.
 
-The head DHCP server will automatically give the worker an address in the `192.168.50.100` to `192.168.50.199` range.
+On the next boot, `immersion-worker-dhcp` requests an address from the head DHCP server. The head assigns an address in the `192.168.50.100` to `192.168.50.199` range.
 
 ## 6. Verify the worker from the head
 
@@ -121,6 +130,14 @@ for ip in $(awk '{print $3}' /var/lib/misc/immersion-bench.leases); do
     curl -fsS --connect-timeout 1 "http://$ip:8765/status" || echo "agent not responding"
 done
 ```
+
+If the lease file is empty, check live DHCP traffic on the head while power-cycling the worker:
+
+```bash
+sudo journalctl -u immersion-bench-dhcp.service -f
+```
+
+A healthy worker boot should produce `DHCPDISCOVER`, `DHCPOFFER`, `DHCPREQUEST`, and `DHCPACK` messages.
 
 ## 7. Start the readable monitor
 
