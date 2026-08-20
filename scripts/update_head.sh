@@ -48,7 +48,7 @@ git reset --hard "${REMOTE}/${BRANCH}"
 # Validate Python syntax without generating bytecode inside the root-owned
 # repository. This keeps normal-user launches and manual checks free from
 # root-owned __pycache__ permission problems.
-for file in dual_monitor.py worker_agent.py monitor_ui.py monitor_app.py readable_monitor.py; do
+for file in dual_monitor.py worker_agent.py monitor_ui.py monitor_app.py monitor_responsive.py readable_monitor.py; do
   if [[ -f "${file}" ]]; then
     python3 - "${file}" <<'PY'
 from pathlib import Path
