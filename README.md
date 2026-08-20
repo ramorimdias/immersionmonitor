@@ -149,3 +149,44 @@ bash scripts/run_readable_monitor_auto.sh
 ```
 
 On a head with `192.168.50.5/24` on Ethernet, the launcher scans `192.168.50.0/24` on port `8765` and adds responding worker agents automatically.
+
+## 8. Create a reusable golden worker SD image
+
+Once one worker is fully working on the bench, it can be converted into a golden image and cloned to additional Raspberry Pis.
+
+Do not make a raw clone before this preparation step. A normal clone would duplicate the machine ID, SSH host keys, and hostname.
+
+The template preparation installs a one-time first-boot service and then removes identities that must be unique. Each cloned Raspberry Pi creates its own identity on first boot.
+
+### Prepare the working worker while it remains on the bench
+
+The worker does not need internet for this step. Download the preparation script on the head and copy it to the worker over the bench network.
+
+Replace `<worker-ip>` with the worker DHCP address shown in the head lease file.
+
+On the head:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ramorimdias/immersionmonitor/main/scripts/prepare_worker_template.sh -o /tmp/prepare_worker_template.sh
+scp /tmp/prepare_worker_template.sh <worker-username>@<worker-ip>:/tmp/prepare_worker_template.sh
+ssh -t <worker-username>@<worker-ip> 'bash /tmp/prepare_worker_template.sh'
+```
+
+The script automatically powers the worker off when preparation is complete.
+
+Do not boot that SD card again before creating the master image. Remove the powered-off SD card and read it into an image file using an SD-card imaging tool.
+
+### What each clone does on its first boot
+
+Each flashed clone automatically:
+
+- generates a new `/etc/machine-id`
+- generates new SSH host keys
+- sets a unique hostname from the Raspberry Pi Ethernet MAC address, for example `worker-79a196`
+- keeps `eth0` on the `immersion-worker-dhcp` DHCP profile
+- enables `bench-worker-agent.service`
+- removes the one-time initialization marker so the identity step does not repeat
+
+After flashing a clone, insert the SD card into another Raspberry Pi, connect it to the bench switch, and power it on. No company-network installation step is needed for cloned workers.
+
+The head DHCP server assigns each clone a different `192.168.50.100` to `192.168.50.199` address, and `readable_monitor.py` discovers each agent automatically.
