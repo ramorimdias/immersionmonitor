@@ -2,8 +2,12 @@
 Description=Update immersionmonitor head Pi from GitHub
 Wants=network-online.target
 After=network-online.target
+StartLimitIntervalSec=10min
+StartLimitBurst=10
 
 [Service]
 Type=oneshot
 EnvironmentFile=-/etc/default/immersionmonitor-update
 ExecStart=/usr/local/sbin/immersionmonitor-update-head.sh
+Restart=on-failure
+RestartSec=30s
