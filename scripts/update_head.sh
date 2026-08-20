@@ -45,12 +45,11 @@ fi
 log "Updating to ${new_sha}..."
 git reset --hard "${REMOTE}/${BRANCH}"
 
-if [[ -f dual_monitor.py ]]; then
-  python3 -m py_compile dual_monitor.py
-fi
-if [[ -f worker_agent.py ]]; then
-  python3 -m py_compile worker_agent.py
-fi
+for file in dual_monitor.py worker_agent.py monitor_ui.py monitor_app.py readable_monitor.py; do
+  if [[ -f "${file}" ]]; then
+    python3 -m py_compile "${file}"
+  fi
+done
 
 log "Update installed successfully."
 
