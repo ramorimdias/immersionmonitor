@@ -9,6 +9,7 @@ INSTALL_DIR="${IMMERSIONMONITOR_INSTALL_DIR:-/opt/immersionmonitor}"
 AGENT_PORT="${BENCH_AGENT_PORT:-8765}"
 SERVICE_NAME="bench-worker-agent.service"
 WORKER_IFACE="${BENCH_WORKER_IFACE:-eth0}"
+WORKER_CONNECTION="${BENCH_WORKER_CONNECTION:-immersion-worker-dhcp}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   SUDO="sudo"
@@ -27,28 +28,54 @@ require_cmd curl
 
 ensure_ethernet_dhcp() {
   if ! command -v nmcli >/dev/null 2>&1; then
-    echo "NetworkManager not detected; leaving ${WORKER_IFACE} network settings unchanged."
-    echo "Fresh Raspberry Pi OS images use DHCP on Ethernet by default."
+    echo "WARNING: NetworkManager/nmcli not detected."
+    echo "Cannot create the dedicated bench DHCP profile automatically."
+    echo "Fresh Raspberry Pi OS Bookworm images normally include NetworkManager."
     return 0
   fi
 
   if ! ip link show "${WORKER_IFACE}" >/dev/null 2>&1; then
-    echo "Interface ${WORKER_IFACE} not found; skipping Ethernet DHCP check."
-    return 0
+    echo "ERROR: interface ${WORKER_IFACE} not found." >&2
+    return 1
   fi
 
-  local connection
-  connection="$(nmcli -g GENERAL.CONNECTION device show "${WORKER_IFACE}" 2>/dev/null | head -n1 || true)"
-  if [[ -z "${connection}" || "${connection}" == "--" ]]; then
-    echo "No active NetworkManager profile found on ${WORKER_IFACE}; leaving configuration unchanged."
-    return 0
+  echo "Preparing dedicated DHCP profile ${WORKER_CONNECTION} on ${WORKER_IFACE}..."
+
+  if nmcli -t -f NAME connection show | grep -Fxq "${WORKER_CONNECTION}"; then
+    ${SUDO} nmcli connection modify "${WORKER_CONNECTION}" \
+      connection.interface-name "${WORKER_IFACE}" \
+      connection.autoconnect yes \
+      connection.autoconnect-priority 200 \
+      ipv4.method auto \
+      ipv4.addresses "" \
+      ipv4.gateway "" \
+      ipv4.dns "" \
+      ipv4.never-default no \
+      ipv6.method auto
+  else
+    ${SUDO} nmcli connection add \
+      type ethernet \
+      ifname "${WORKER_IFACE}" \
+      con-name "${WORKER_CONNECTION}" \
+      connection.autoconnect yes \
+      connection.autoconnect-priority 200 \
+      ipv4.method auto \
+      ipv4.never-default no \
+      ipv6.method auto
   fi
 
-  echo "Ensuring ${WORKER_IFACE} uses DHCP and reconnects automatically after moving to the bench switch..."
-  ${SUDO} nmcli connection modify "${connection}" \
-    connection.autoconnect yes \
-    ipv4.method auto \
-    ipv4.never-default no
+  # Keep the current company connection alive for the rest of this install,
+  # but make the dedicated DHCP profile win automatically on the next boot.
+  # Competing profiles are left present as fallbacks, with lower priority.
+  while IFS=: read -r name iface; do
+    [[ -z "${name}" ]] && continue
+    if [[ "${iface}" == "${WORKER_IFACE}" && "${name}" != "${WORKER_CONNECTION}" ]]; then
+      ${SUDO} nmcli connection modify "${name}" connection.autoconnect yes connection.autoconnect-priority 0 || true
+    fi
+  done < <(nmcli -t -f NAME,connection.interface-name connection show)
+
+  echo "Dedicated worker Ethernet profile ready."
+  echo "It will request DHCP automatically on ${WORKER_IFACE} after the next boot."
 }
 
 echo "Installing bench worker dependencies..."
@@ -78,5 +105,6 @@ ${SUDO} systemctl --no-pager --lines=8 status "${SERVICE_NAME}" || true
 echo
 echo "Bench worker agent installed."
 echo "Local check: curl http://127.0.0.1:${AGENT_PORT}/status"
+echo "Ethernet profile: ${WORKER_CONNECTION} (${WORKER_IFACE}, DHCP, autoconnect priority 200)"
 echo "After moving this Pi to the isolated bench switch, the head DHCP server will assign its Ethernet address."
 echo "From the head Pi: discover this node on ${AGENT_PORT}/tcp in 192.168.50.0/24."
