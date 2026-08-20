@@ -2,10 +2,10 @@
 Description=Run immersionmonitor head Pi update on boot and daily
 
 [Timer]
-OnBootSec=2min
+OnBootSec=20s
 OnCalendar=*-*-* 06:00:00
 Persistent=true
-RandomizedDelaySec=5min
+RandomizedDelaySec=2min
 Unit=bench-head-update.service
 
 [Install]
