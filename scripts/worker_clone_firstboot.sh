@@ -4,7 +4,6 @@ set -euo pipefail
 STATE_DIR="/var/lib/immersionmonitor"
 PENDING_MARKER="${STATE_DIR}/clone-firstboot.pending"
 WORKER_IFACE="${BENCH_WORKER_IFACE:-eth0}"
-WORKER_CONNECTION="${BENCH_WORKER_CONNECTION:-immersion-worker-dhcp}"
 AGENT_SERVICE="bench-worker-agent.service"
 FIRSTBOOT_SERVICE="immersion-worker-clone-firstboot.service"
 
@@ -58,26 +57,6 @@ log "Generating unique SSH host keys."
 rm -f /etc/ssh/ssh_host_*
 ssh-keygen -A
 
-if command -v nmcli >/dev/null 2>&1; then
-  log "Ensuring ${WORKER_IFACE} uses the dedicated DHCP profile ${WORKER_CONNECTION}."
-  if nmcli -t -f NAME connection show | grep -Fxq "${WORKER_CONNECTION}"; then
-    nmcli connection modify "${WORKER_CONNECTION}" \
-      connection.interface-name "${WORKER_IFACE}" \
-      connection.autoconnect yes \
-      connection.autoconnect-priority 200 \
-      ipv4.method auto \
-      ipv4.never-default no
-  else
-    nmcli connection add \
-      type ethernet \
-      ifname "${WORKER_IFACE}" \
-      con-name "${WORKER_CONNECTION}" \
-      connection.autoconnect yes \
-      connection.autoconnect-priority 200 \
-      ipv4.method auto
-  fi
-fi
-
 log "Enabling worker agent."
 systemctl enable "${AGENT_SERVICE}" >/dev/null 2>&1 || true
 
@@ -86,4 +65,4 @@ systemctl disable "${FIRSTBOOT_SERVICE}" >/dev/null 2>&1 || true
 
 log "Clone initialization complete."
 log "Hostname: ${new_hostname}"
-log "Ethernet: DHCP on ${WORKER_IFACE}"
+log "Ethernet: DHCP profile prepared on ${WORKER_IFACE}"
