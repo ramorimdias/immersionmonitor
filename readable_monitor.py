@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Stable entrypoint for the clean immersion bench monitor UI.
+"""Stable entrypoint for the immersion bench monitor UI.
 
-Existing launch scripts can keep invoking ``readable_monitor.py``. The actual
-application now lives in ``monitor_app.py`` so the operator UI can evolve
-without accumulating more compatibility code in the entrypoint.
+Existing launch scripts keep invoking ``readable_monitor.py``. The responsive
+operator shell lives in ``monitor_responsive.py`` while acquisition and control
+remain in the existing backend modules.
 """
 
-from monitor_app import main
+from monitor_responsive import main
 
 
 if __name__ == "__main__":
