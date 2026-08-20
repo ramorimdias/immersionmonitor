@@ -45,9 +45,19 @@ fi
 log "Updating to ${new_sha}..."
 git reset --hard "${REMOTE}/${BRANCH}"
 
+# Validate Python syntax without generating bytecode inside the root-owned
+# repository. This keeps normal-user launches and manual checks free from
+# root-owned __pycache__ permission problems.
 for file in dual_monitor.py worker_agent.py monitor_ui.py monitor_app.py readable_monitor.py; do
   if [[ -f "${file}" ]]; then
-    python3 -m py_compile "${file}"
+    python3 - "${file}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+compile(source, str(path), "exec")
+PY
   fi
 done
 
