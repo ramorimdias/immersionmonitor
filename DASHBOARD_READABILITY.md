@@ -1,123 +1,124 @@
-# Readable dashboard
+# Clean dashboard architecture
 
-`readable_monitor.py` is an operator-friendly dashboard entrypoint built on top of the existing `dual_monitor.py` logic.
+The operator application has been rebuilt so the UI is no longer an incremental variation of the original dashboard.
 
-It keeps the same core functions:
+The launch command remains unchanged:
+
+```bash
+cd /opt/immersionmonitor
+bash scripts/run_readable_monitor_auto.sh
+```
+
+`readable_monitor.py` is now only a stable compatibility entrypoint. The application is split into:
+
+```text
+readable_monitor.py   stable launcher entrypoint
+monitor_app.py        application layout, UI state, worker presentation, plot rendering
+monitor_ui.py         reusable cards, buttons, duration controls, palette and ttk styles
+dual_monitor.py       proven acquisition/control backend kept for hardware compatibility
+worker_agent.py       worker HTTP agent
+```
+
+## Operator layout
+
+The new interface has two purpose-specific screens instead of a growing set of mixed controls.
+
+### Live monitor
+
+The main screen contains:
+
+- test-state, worker, MCC-134 and recording summary cards
+- a large temperature-history plot
+- Wait, Stress and Cooling duration controls
+- Start sequence, Stop stress and Skip cooling controls
+- Start log, Stop log and Save XLSX controls
+- Auto/Tighter/Wider temperature scaling
+- recent event messages
+
+### Workers & setup
+
+The setup screen contains:
+
+- current worker availability
+- discovery status and subnet information
+- MCC-134 status
+- worker table with hostname, IP, CPU temperature, clock, CPU load and last-seen state
+- Reboot all workers
+- Clear collected data
+
+## Preserved behavior
+
+The refactor intentionally keeps the existing bench behavior:
 
 ```text
 MCC-134 thermocouple acquisition
-worker-agent discovery
+worker-agent auto discovery
 optional SSH fallback nodes
 stress start/stop
-CSV logging
+wait -> stress -> cooling sequence
+manual logging
+raw CSV buffering
 Excel export
-plotting
+worker reboot
+full-screen operation
+headless mode
 ```
 
-It changes the screen layout so the graph remains readable and the user can understand worker discovery.
-
-## What is improved
+The default worker discovery network is:
 
 ```text
-Graph and configuration are separated into two tabs
-The Graph tab gives the plot almost the full window
-The Graph tab uses a compact touch toolbar and keeps repeated status details off the chart view
-The UI is tuned for touch screens with larger buttons, bigger text, and wider hit targets
-The Configuration / Workers tab keeps discovery, sequence settings, maintenance actions, and the worker table
-The new dashboard defaults to worker-agent discovery only
-It does not read /home/motul/nodes_ips unless --nodes-file is explicitly provided
-Bench status cards show MCC-134, worker count, discovery, and run state on the Configuration / Workers tab
-Discovery status shows CIDR, port, scan result, and last scan time
-Worker table shows state, hostname, IP, source, temperature, clock, CPU, and last seen
-Operator help text explains what to check when workers are missing
+192.168.50.0/24
 ```
 
-## Recommended run command
+and the default worker-agent port is:
 
-Use the auto launcher so the head Pi scans the correct subnet whether it is on `192.168.50.x` or `10.50.0.x`:
+```text
+8765
+```
+
+## Recommended launch
+
+The automatic launcher detects the head bench subnet and starts the clean UI:
 
 ```bash
 cd /opt/immersionmonitor
 bash scripts/run_readable_monitor_auto.sh
 ```
 
-The auto launcher selects:
+The desktop shortcut uses the same launcher, so no shortcut change is required after the UI refactor.
 
-```text
-Head IP 192.168.50.x  -> scans 192.168.50.0/24
-Head IP 10.50.0.x     -> scans 10.50.0.0/24
-Other private IP      -> scans that /24 subnet
-```
-
-## Manual run commands
-
-Default discovery-only mode:
+## Manual launch
 
 ```bash
 cd /opt/immersionmonitor
-python3 readable_monitor.py
+python3 readable_monitor.py --discovery-cidr 192.168.50.0/24 --agent-port 8765
 ```
 
-This scans the default bench subnet:
+Static SSH fallback remains opt-in:
+
+```bash
+python3 readable_monitor.py \
+  --nodes-file /home/motul/nodes_ips \
+  --discovery-cidr 192.168.50.0/24 \
+  --agent-port 8765
+```
+
+## Troubleshooting
+
+If a worker is missing, check:
 
 ```text
-10.50.0.0/24
+worker powered on
+Ethernet connected to the isolated bench switch
+head DHCP lease exists
+worker responds on TCP 8765
+bench-worker-agent.service is running
 ```
 
-Use another subnet if needed:
+Useful head commands:
 
 ```bash
-python3 readable_monitor.py --discovery-cidr 192.168.50.0/24 --agent-port 8765
-python3 readable_monitor.py --discovery-cidr 10.50.0.0/24 --agent-port 8765
-```
-
-You can also force the auto launcher:
-
-```bash
-DISCOVERY_CIDR=192.168.50.0/24 bash scripts/run_readable_monitor_auto.sh
-DISCOVERY_CIDR=10.50.0.0/24 bash scripts/run_readable_monitor_auto.sh
-```
-
-The old dashboard still works and keeps its previous behavior:
-
-```bash
-python3 dual_monitor.py --discovery-cidr 10.50.0.0/24 --agent-port 8765
-```
-
-## Optional SSH fallback
-
-Static SSH fallback nodes are disabled by default in `readable_monitor.py`.
-
-To enable them explicitly:
-
-```bash
-python3 readable_monitor.py --nodes-file /home/motul/nodes_ips --discovery-cidr 10.50.0.0/24
-```
-
-## When a worker is missing
-
-Check, in this order:
-
-```text
-1. Worker Pi powered on
-2. Ethernet cable connected to the bench switch
-3. Worker got an IP on the same bench subnet
-4. Worker agent service is running
-5. Head Pi launched with the correct discovery CIDR
-```
-
-Useful worker commands:
-
-```bash
-systemctl status bench-worker-agent.service
-curl http://127.0.0.1:8765/status
-hostname -I
-```
-
-Useful head Pi commands:
-
-```bash
-bash scripts/run_readable_monitor_auto.sh
-python3 readable_monitor.py --discovery-cidr 192.168.50.0/24 --agent-port 8765
-python3 readable_monitor.py --discovery-cidr 10.50.0.0/24 --agent-port 8765
+cat /var/lib/misc/immersion-bench.leases
+curl http://<worker-ip>:8765/status
+journalctl -u bench-head-update.service -n 30 --no-pager
 ```
