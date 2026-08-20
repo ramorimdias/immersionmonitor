@@ -2,7 +2,7 @@
 Description=Initialize cloned immersion worker identity
 ConditionPathExists=/var/lib/immersionmonitor/clone-firstboot.pending
 After=local-fs.target
-Before=network.target ssh.service sshd.service bench-worker-agent.service
+Before=NetworkManager.service network.target ssh.service sshd.service bench-worker-agent.service
 
 [Service]
 Type=oneshot
