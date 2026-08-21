@@ -2,8 +2,10 @@
 set -euo pipefail
 
 LOG_FILE="/boot/firmware/immersionmonitor-firstboot.log"
+STATUS_FILE="/boot/firmware/immersionmonitor-status.txt"
 BOOT_CMDLINE="/boot/firmware/cmdline.txt"
-WIFI_ENV="/boot/firmware/immersionmonitor-wifi.env"
+PROVISION_ENV="/boot/firmware/immersionmonitor-worker.env"
+LEGACY_WIFI_ENV="/boot/firmware/immersionmonitor-wifi.env"
 INSTALL_DIR="${IMMERSIONMONITOR_INSTALL_DIR:-/opt/immersionmonitor}"
 REPO_OWNER="${IMMERSIONMONITOR_REPO_OWNER:-ramorimdias}"
 REPO_NAME="${IMMERSIONMONITOR_REPO_NAME:-immersionmonitor}"
@@ -13,9 +15,26 @@ AGENT_PORT="${BENCH_AGENT_PORT:-8765}"
 SERVICE_NAME="bench-worker-agent.service"
 PROVISION_SERVICE="immersionmonitor-worker-provision.service"
 
-exec > >(tee -a "${LOG_FILE}") 2>&1
+exec > >(tee -a "${LOG_FILE}" /dev/console) 2>&1
 
-echo "===== immersionmonitor worker provisioning: $(date --iso-8601=seconds) ====="
+status() {
+  local message="$*"
+  echo "[immersionmonitor] ${message}"
+  printf '%s %s\n' "$(date --iso-8601=seconds 2>/dev/null || date)" "${message}" >> "${STATUS_FILE}" || true
+}
+
+status "worker provisioning started"
+
+load_boot_config() {
+  if [[ -f "${PROVISION_ENV}" ]]; then
+    # shellcheck disable=SC1090
+    source "${PROVISION_ENV}"
+  elif [[ -f "${LEGACY_WIFI_ENV}" ]]; then
+    # shellcheck disable=SC1090
+    source "${LEGACY_WIFI_ENV}"
+  fi
+  STATUS_FILE="${PROVISION_STATUS_FILE:-${STATUS_FILE}}"
+}
 
 cleanup_cmdline() {
   if [[ -f "${BOOT_CMDLINE}" ]]; then
@@ -27,16 +46,44 @@ cleanup_cmdline() {
   fi
 }
 
-configure_wifi() {
-  if [[ ! -f "${WIFI_ENV}" ]]; then
-    echo "No Wi-Fi config file found; skipping Wi-Fi setup."
+configure_linux_user() {
+  if [[ -z "${LINUX_USER_B64:-}" || -z "${LINUX_PASSWORD_B64:-}" ]]; then
+    status "no Linux user fallback configured; skipping user creation"
     return 0
   fi
 
-  # shellcheck disable=SC1090
-  source "${WIFI_ENV}"
+  username="$(printf '%s' "${LINUX_USER_B64}" | base64 -d)"
+  password="$(printf '%s' "${LINUX_PASSWORD_B64}" | base64 -d)"
+
+  if id "${username}" >/dev/null 2>&1; then
+    status "Linux user ${username} already exists"
+  else
+    status "creating Linux user ${username}"
+    groups="sudo,adm,dialout,cdrom,audio,video,plugdev,games,users,input,render,netdev"
+    for optional_group in gpio i2c spi; do
+      if getent group "${optional_group}" >/dev/null 2>&1; then
+        groups="${groups},${optional_group}"
+      fi
+    done
+    useradd -m -s /bin/bash -G "${groups}" "${username}"
+  fi
+
+  echo "${username}:${password}" | chpasswd
+  status "password set for ${username}"
+
+  cat > "/etc/sudoers.d/010_${username}-bench" <<EOF
+${username} ALL=(ALL) NOPASSWD:ALL
+EOF
+  chmod 440 "/etc/sudoers.d/010_${username}-bench"
+
+  systemctl disable userconfig.service >/dev/null 2>&1 || true
+  systemctl mask userconfig.service >/dev/null 2>&1 || true
+  status "interactive first-user prompt disabled if present"
+}
+
+configure_wifi() {
   if [[ -z "${WIFI_SSID_B64:-}" || -z "${WIFI_PASSWORD_B64:-}" ]]; then
-    echo "Wi-Fi config file exists but SSID or password is missing."
+    status "no Wi-Fi config found; skipping Wi-Fi setup"
     return 0
   fi
 
@@ -44,7 +91,7 @@ configure_wifi() {
   password="$(printf '%s' "${WIFI_PASSWORD_B64}" | base64 -d)"
   country="${WIFI_COUNTRY:-FR}"
 
-  echo "Configuring Wi-Fi SSID: ${ssid}"
+  status "configuring Wi-Fi SSID: ${ssid}"
   mkdir -p /etc/NetworkManager/system-connections
   cat > /etc/NetworkManager/system-connections/immersionmonitor-worker-wifi.nmconnection <<EOF
 [connection]
@@ -70,7 +117,6 @@ addr-gen-mode=default
 EOF
   chmod 600 /etc/NetworkManager/system-connections/immersionmonitor-worker-wifi.nmconnection
 
-  # Fallback for images still using wpa_supplicant.
   mkdir -p /etc/wpa_supplicant
   cat > /etc/wpa_supplicant/wpa_supplicant.conf <<EOF
 country=${country}
@@ -82,10 +128,11 @@ network={
 }
 EOF
   chmod 600 /etc/wpa_supplicant/wpa_supplicant.conf
+  status "Wi-Fi configuration written"
 }
 
 install_second_stage_service() {
-  echo "Installing second-stage provisioning service."
+  status "installing second-stage provisioning service"
   cat > "/etc/systemd/system/${PROVISION_SERVICE}" <<EOF
 [Unit]
 Description=Provision immersionmonitor worker after network is online
@@ -96,6 +143,8 @@ After=network-online.target
 Type=oneshot
 ExecStart=/boot/firmware/worker_firstboot.sh --install
 RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
 
 [Install]
 WantedBy=multi-user.target
@@ -105,23 +154,26 @@ EOF
 }
 
 wait_for_network() {
-  echo "Waiting for usable network: DHCP + DNS + GitHub access..."
-  for _ in $(seq 1 120); do
+  status "waiting for usable network: DHCP + DNS + GitHub access"
+  for attempt in $(seq 1 120); do
     ip -4 addr show scope global || true
     if getent hosts raw.githubusercontent.com >/dev/null 2>&1 && \
        curl -fsI --connect-timeout 5 --max-time 10 "${BASE_URL}/worker_agent.py" >/dev/null 2>&1; then
-      echo "Network is ready."
+      status "network ready on attempt ${attempt}"
       return 0
+    fi
+    if (( attempt % 10 == 0 )); then
+      status "still waiting for network, attempt ${attempt}/120"
     fi
     sleep 3
   done
-  echo "ERROR: Network is not ready or GitHub is blocked."
-  echo "Check DHCP, DNS, proxy, firewall, and whether raw.githubusercontent.com is allowed."
+  status "ERROR: network is not ready or GitHub is blocked"
+  status "check DHCP, DNS, proxy, firewall, and raw.githubusercontent.com access"
   return 1
 }
 
 wait_for_apt() {
-  echo "Waiting for apt locks..."
+  status "waiting for apt locks"
   for _ in $(seq 1 60); do
     if ! fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && \
        ! fuser /var/lib/dpkg/lock >/dev/null 2>&1 && \
@@ -130,25 +182,25 @@ wait_for_apt() {
     fi
     sleep 2
   done
-  echo "APT lock wait timed out; continuing anyway."
+  status "APT lock wait timed out; continuing anyway"
 }
 
 install_worker() {
   wait_for_network
   wait_for_apt
 
-  echo "Updating package index..."
+  status "running apt-get update"
   apt-get update
 
-  echo "Installing dependencies..."
+  status "installing dependencies: python3 stress-ng curl ca-certificates"
   DEBIAN_FRONTEND=noninteractive apt-get install -y python3 stress-ng curl ca-certificates
 
-  echo "Installing worker agent in ${INSTALL_DIR}..."
+  status "installing worker agent in ${INSTALL_DIR}"
   mkdir -p "${INSTALL_DIR}"
   curl -fsSL "${BASE_URL}/worker_agent.py" -o "${INSTALL_DIR}/worker_agent.py"
   chmod 755 "${INSTALL_DIR}/worker_agent.py"
 
-  echo "Installing worker systemd service..."
+  status "installing worker systemd service"
   tmp_service="$(mktemp)"
   curl -fsSL "${BASE_URL}/systemd/${SERVICE_NAME}" -o "${tmp_service}"
   sed -i "s/--port 8765/--port ${AGENT_PORT}/" "${tmp_service}"
@@ -158,32 +210,34 @@ install_worker() {
   systemctl daemon-reload
   systemctl enable "${SERVICE_NAME}"
 
-  echo "Disabling provisioning service."
+  status "disabling provisioning service"
   systemctl disable "${PROVISION_SERVICE}" || true
   rm -f "/etc/systemd/system/${PROVISION_SERVICE}"
   systemctl daemon-reload
 
-  echo "Installation complete. Worker agent will start after reboot."
+  status "installation complete; worker agent will start after reboot"
 }
 
 main() {
+  load_boot_config
   case "${1:-}" in
     --install)
       if install_worker; then
         sync
-        echo "Second-stage provisioning succeeded. Rebooting."
+        status "second-stage provisioning succeeded; rebooting"
         reboot
       else
-        echo "Second-stage provisioning failed. It will retry on next normal boot."
+        status "second-stage provisioning failed; it will retry on next normal boot"
         exit 1
       fi
       ;;
     *)
+      configure_linux_user
       configure_wifi
       install_second_stage_service
       cleanup_cmdline
       sync
-      echo "First-stage setup complete. Rebooting into normal boot so networking can start."
+      status "first-stage setup complete; rebooting into normal boot"
       reboot
       ;;
   esac
